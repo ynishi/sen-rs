@@ -1,0 +1,16 @@
+[package]
+name = "sen"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Script to System CLI Engine - A type-safe, macro-powered CLI framework"
+keywords = ["cli", "framework", "macro", "routing"]
+categories = ["command-line-interface", "development-tools"]
+readme = "../README.md"
+
+[dependencies]
+sen-rs-macros = { path = "../sen-rs-macros", version = "0.1.0" }
+
+[dev-dependencies]
+# Add test dependencies here as needed
