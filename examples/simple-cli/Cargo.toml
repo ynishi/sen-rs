@@ -12,3 +12,4 @@ path = "src/main.rs"
 
 [dependencies]
 sen = { path = "../../sen-rs" }
+tokio = { version = "1.42", features = ["full"] }

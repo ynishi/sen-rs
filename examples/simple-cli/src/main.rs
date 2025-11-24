@@ -95,9 +95,9 @@ impl Commands {
 mod handlers {
     use super::*;
 
-    pub fn status(state: State<AppState>) -> CliResult<String> {
+    pub async fn status(state: State<AppState>) -> CliResult<String> {
         info!("Fetching project status");
-        let app = state.get();
+        let app = state.read().await;
 
         Ok(format!(
             "Project Status\n\
@@ -109,9 +109,9 @@ mod handlers {
         ))
     }
 
-    pub fn build(state: State<AppState>, args: BuildArgs) -> CliResult<String> {
+    pub async fn build(state: State<AppState>, args: BuildArgs) -> CliResult<String> {
         info!(release = args.release, "Starting build");
-        let app = state.get();
+        let app = state.read().await;
 
         let mut cmd = app.config.build_command.clone();
         if args.release {
@@ -122,9 +122,9 @@ mod handlers {
         Ok(format!("Would execute: {}", cmd))
     }
 
-    pub fn test(state: State<AppState>, args: TestArgs) -> CliResult<String> {
+    pub async fn test(state: State<AppState>, args: TestArgs) -> CliResult<String> {
         info!(filter = ?args.filter, "Starting tests");
-        let app = state.get();
+        let app = state.read().await;
 
         // Demo: validation error
         if args.filter.as_deref() == Some("invalid") {
@@ -146,7 +146,8 @@ mod handlers {
 // Main Entry Point
 // ============================================
 
-fn main() {
+#[tokio::main]
+async fn main() {
     // 0. Initialize tracing (controlled by RUST_LOG environment variable)
     init_subscriber();
 
@@ -168,8 +169,8 @@ fn main() {
         }
     };
 
-    // 3. Execute command (macro-generated execute() method)
-    let response = cmd.execute(State::new(app_state));
+    // 3. Execute command (macro-generated async execute() method)
+    let response = cmd.execute(State::new(app_state)).await;
 
     // 4. Handle response
     if !response.output.is_empty() {

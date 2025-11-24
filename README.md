@@ -57,15 +57,16 @@ pub struct BuildArgs {
     pub release: bool,
 }
 
-// 3. Implement handlers as plain functions
+// 3. Implement handlers as async functions
 mod handlers {
     use super::*;
 
-    pub fn status(state: State<AppState>) -> CliResult<String> {
-        Ok(format!("Config: {}", state.get().config))
+    pub async fn status(state: State<AppState>) -> CliResult<String> {
+        let app = state.read().await;
+        Ok(format!("Config: {}", app.config))
     }
 
-    pub fn build(state: State<AppState>, args: BuildArgs) -> CliResult<()> {
+    pub async fn build(state: State<AppState>, args: BuildArgs) -> CliResult<()> {
         let mode = if args.release { "release" } else { "debug" };
         println!("Building in {} mode", mode);
         Ok(())
@@ -73,13 +74,14 @@ mod handlers {
 }
 
 // 4. Wire it up (< 50 lines of main.rs)
-fn main() {
+#[tokio::main]
+async fn main() {
     let state = State::new(AppState {
         config: "production".to_string(),
     });
 
     let cmd = Commands::parse(); // Your arg parsing logic
-    let response = cmd.execute(state); // Macro-generated!
+    let response = cmd.execute(state).await; // Macro-generated async execute!
 
     if !response.output.is_empty() {
         println!("{}", response.output);
@@ -143,11 +145,11 @@ router.add("/status", handlers::status);  // Typo? Runtime panic!
 
 ```rust
 // Order doesn't matter!
-pub fn handler1(state: State<App>, args: Args) -> CliResult<String>
-pub fn handler2(args: Args, state: State<App>) -> CliResult<String>
+pub async fn handler1(state: State<App>, args: Args) -> CliResult<String>
+pub async fn handler2(args: Args, state: State<App>) -> CliResult<String>
 
 // State optional
-pub fn handler3(args: Args) -> CliResult<()>
+pub async fn handler3(args: Args) -> CliResult<()>
 ```
 
 ### 3. Smart Error Handling
@@ -175,13 +177,13 @@ Handlers return structured data, framework handles output:
 
 ```rust
 // ❌ Bad: Can't test, can't redirect
-pub fn status() -> CliResult<()> {
+pub async fn status() -> CliResult<()> {
     println!("Status: OK");
     Ok(())
 }
 
 // ✅ Good: Testable, flexible
-pub fn status() -> CliResult<StatusReport> {
+pub async fn status() -> CliResult<StatusReport> {
     Ok(StatusReport { status: "OK" })
 }
 ```

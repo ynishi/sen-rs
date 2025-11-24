@@ -22,10 +22,10 @@ use syn::{parse_macro_input, Data, DeriveInput, Fields};
 ///
 /// ```ignore
 /// impl Commands {
-///     pub fn execute(self, state: sen::State<AppState>) -> sen::Response {
+///     pub async fn execute(self, state: sen::State<AppState>) -> sen::Response {
 ///         match self {
-///             Commands::Status => handlers::status(state).into_response(),
-///             Commands::Build(args) => handlers::build(state, args).into_response(),
+///             Commands::Status => handlers::status(state).await.into_response(),
+///             Commands::Build(args) => handlers::build(state, args).await.into_response(),
 ///         }
 ///     }
 /// }
@@ -59,7 +59,7 @@ pub fn derive_sen_router(input: TokenStream) -> TokenStream {
                         // No args, only inject state
                         quote! {
                             #enum_name::#variant_name => {
-                                #handler_path(state).into_response()
+                                #handler_path(state).await.into_response()
                             }
                         }
                     }
@@ -67,7 +67,7 @@ pub fn derive_sen_router(input: TokenStream) -> TokenStream {
                         // Has args, inject state and args
                         quote! {
                             #enum_name::#variant_name(args) => {
-                                #handler_path(state, args).into_response()
+                                #handler_path(state, args).await.into_response()
                             }
                         }
                     }
@@ -83,7 +83,7 @@ pub fn derive_sen_router(input: TokenStream) -> TokenStream {
     // Generate the implementation
     let expanded = quote! {
         impl #enum_name {
-            pub fn execute(self, state: sen::State<#state_type>) -> sen::Response {
+            pub async fn execute(self, state: sen::State<#state_type>) -> sen::Response {
                 use sen::IntoResponse;
 
                 match self {

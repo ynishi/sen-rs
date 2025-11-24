@@ -30,24 +30,26 @@
 //!     Build(BuildArgs),
 //! }
 //!
-//! // Implement handlers as plain functions
+//! // Implement handlers as async functions
 //! mod handlers {
 //!     use super::*;
 //!
-//!     pub fn status(state: State<AppState>) -> CliResult<String> {
+//!     pub async fn status(state: State<AppState>) -> CliResult<String> {
+//!         let app = state.read().await;
 //!         Ok("Status: OK".to_string())
 //!     }
 //!
-//!     pub fn build(state: State<AppState>, args: BuildArgs) -> CliResult<()> {
-//!         // Build logic here
+//!     pub async fn build(state: State<AppState>, args: BuildArgs) -> CliResult<()> {
+//!         // Build logic here (can use async DB, API calls, etc.)
 //!         Ok(())
 //!     }
 //! }
 //!
-//! fn main() {
+//! #[tokio::main]
+//! async fn main() {
 //!     let state = State::new(AppState { config: Config::load() });
 //!     let cmd = Commands::parse();
-//!     let response = cmd.execute(state);
+//!     let response = cmd.execute(state).await;
 //!
 //!     if !response.output.is_empty() {
 //!         println!("{}", response.output);
@@ -83,14 +85,14 @@ pub use build_info::{version_info, version_short};
 // Core Types
 // ============================================================================
 
-/// Shared application state wrapper.
+/// Shared application state wrapper with async-safe interior mutability.
 ///
-/// Wraps your application state in an `Arc` for cheap cloning across handlers.
+/// Wraps your application state in `Arc<RwLock<T>>` for safe concurrent access.
 /// Handlers receive this by value, but cloning is cheap (just incrementing a ref count).
 ///
 /// # Example
 ///
-/// ```
+/// ```ignore
 /// use sen::State;
 ///
 /// struct AppState {
@@ -101,21 +103,41 @@ pub use build_info::{version_info, version_short};
 ///     config: "production".to_string(),
 /// });
 ///
-/// // Access inner state
-/// assert_eq!(state.get().config, "production");
+/// // Access inner state (read-only)
+/// let app = state.read().await;
+/// assert_eq!(app.config, "production");
+///
+/// // Mutate inner state
+/// let mut app = state.write().await;
+/// app.config = "development".to_string();
 /// ```
-#[derive(Clone)]
-pub struct State<T>(Arc<T>);
+pub struct State<T>(Arc<tokio::sync::RwLock<T>>);
+
+// Manual Clone implementation that doesn't require T: Clone
+impl<T> Clone for State<T> {
+    fn clone(&self) -> Self {
+        Self(Arc::clone(&self.0))
+    }
+}
 
 impl<T> State<T> {
     /// Create a new state wrapper.
     pub fn new(inner: T) -> Self {
-        Self(Arc::new(inner))
+        Self(Arc::new(tokio::sync::RwLock::new(inner)))
     }
 
-    /// Get a reference to the inner state.
-    pub fn get(&self) -> &T {
-        &self.0
+    /// Get a read lock to the inner state.
+    ///
+    /// Multiple readers can hold read locks simultaneously.
+    pub async fn read(&self) -> tokio::sync::RwLockReadGuard<'_, T> {
+        self.0.read().await
+    }
+
+    /// Get a write lock to the inner state.
+    ///
+    /// Only one writer can hold a write lock at a time.
+    pub async fn write(&self) -> tokio::sync::RwLockWriteGuard<'_, T> {
+        self.0.write().await
     }
 }
 
@@ -372,18 +394,35 @@ impl<T: IntoResponse> IntoResponse for CliResult<T> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_state_creation_and_access() {
-        #[derive(Clone)]
+    #[tokio::test]
+    async fn test_state_creation_and_access() {
         struct TestState {
             value: i32,
         }
 
         let state = State::new(TestState { value: 42 });
-        assert_eq!(state.get().value, 42);
+        assert_eq!(state.read().await.value, 42);
 
         let cloned = state.clone();
-        assert_eq!(cloned.get().value, 42);
+        assert_eq!(cloned.read().await.value, 42);
+    }
+
+    #[tokio::test]
+    async fn test_state_write() {
+        struct TestState {
+            value: i32,
+        }
+
+        let state = State::new(TestState { value: 42 });
+
+        // Mutate through write lock
+        {
+            let mut app = state.write().await;
+            app.value = 100;
+        }
+
+        // Verify mutation
+        assert_eq!(state.read().await.value, 100);
     }
 
     #[test]
