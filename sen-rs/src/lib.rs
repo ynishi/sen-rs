@@ -61,6 +61,24 @@ use std::sync::Arc;
 // Re-export the derive macro
 pub use sen_rs_macros::SenRouter;
 
+// Optional modules
+pub mod build_info;
+pub mod tracing_support;
+
+// Re-export tracing itself (required for #[instrument] macro)
+#[cfg(feature = "tracing")]
+pub use tracing_support::tracing;
+
+// Re-export commonly used items
+#[cfg(feature = "tracing")]
+pub use tracing_support::{
+    debug, error, info, init_subscriber, init_subscriber_with_config, instrument, trace, warn,
+    TracingConfig, TracingFormat,
+};
+
+#[cfg(feature = "build-info")]
+pub use build_info::{version_info, version_short};
+
 // ============================================================================
 // Core Types
 // ============================================================================
@@ -173,13 +191,21 @@ impl std::fmt::Display for UserError {
                 write!(f, "Error: Invalid argument '{}'\n\n{}", arg, reason)
             }
             UserError::MissingDependency { tool, install_hint } => {
-                write!(f, "Error: Missing dependency '{}'\n\nHint: {}", tool, install_hint)
+                write!(
+                    f,
+                    "Error: Missing dependency '{}'\n\nHint: {}",
+                    tool, install_hint
+                )
             }
             UserError::ValidationFailed { details } => {
                 write!(f, "Error: Validation failed\n\n{}", details.join("\n"))
             }
             UserError::PrerequisiteNotMet { check, fix_hint } => {
-                write!(f, "Error: Prerequisite not met: {}\n\nHint: {}", check, fix_hint)
+                write!(
+                    f,
+                    "Error: Prerequisite not met: {}\n\nHint: {}",
+                    check, fix_hint
+                )
             }
         }
     }
@@ -205,10 +231,18 @@ impl std::fmt::Display for SystemError {
                 write!(f, "Internal Error: {}\n\nThis is likely a bug.", msg)
             }
             SystemError::Io(e) => {
-                write!(f, "Internal Error: I/O operation failed\n\n{:?}\n\nThis is likely a bug.", e)
+                write!(
+                    f,
+                    "Internal Error: I/O operation failed\n\n{:?}\n\nThis is likely a bug.",
+                    e
+                )
             }
             SystemError::ConfigParse(e) => {
-                write!(f, "Internal Error: Config parse failed\n\n{}\n\nThis is likely a bug.", e)
+                write!(
+                    f,
+                    "Internal Error: Config parse failed\n\n{}\n\nThis is likely a bug.",
+                    e
+                )
             }
         }
     }

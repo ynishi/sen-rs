@@ -8,9 +8,21 @@ description = "Script to System CLI Engine - A type-safe, macro-powered CLI fram
 keywords = ["cli", "framework", "macro", "routing"]
 categories = ["command-line-interface", "development-tools"]
 readme = "../README.md"
+build = "build.rs"
 
 [dependencies]
 sen-rs-macros = { path = "../sen-rs-macros", version = "0.1.0" }
+built = { version = "0.7", optional = true, features = ["chrono", "git2"] }
+tracing = { version = "0.1", optional = true }
+tracing-subscriber = { version = "0.3", optional = true, features = ["env-filter", "fmt", "json"] }
+
+[build-dependencies]
+built = { version = "0.7", features = ["chrono", "git2"] }
+
+[features]
+default = ["build-info", "tracing"]
+build-info = ["dep:built"]
+tracing = ["dep:tracing", "dep:tracing-subscriber"]
 
 [dev-dependencies]
 # Add test dependencies here as needed

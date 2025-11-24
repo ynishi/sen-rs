@@ -80,15 +80,6 @@ preflight:
 	@echo ""
 	@echo "✅ All preflight checks passed!"
 
-release-check:
-	@echo "🔍 Dry-run release with cargo-release..."
-	@echo ""
-	@echo "Note: Install cargo-release if not already installed:"
-	@echo "  cargo install cargo-release"
-	@echo ""
-	@echo "Checking patch release (0.x.y -> 0.x.y+1)..."
-	cargo release patch
-
 release-patch: preflight
 	@echo "🚀 Releasing PATCH version with cargo-release..."
 	@echo ""
@@ -98,7 +89,7 @@ release-patch: preflight
 	@echo "  - (Publish step is manual, see make publish)"
 	@echo ""
 	@read -p "Continue? [y/N] " confirm && [ "$$confirm" = "y" ] || exit 1
-	cargo release patch --execute --no-confirm
+	cargo release patch --execute --no-confirm --no-publish
 
 release-minor: preflight
 	@echo "🚀 Releasing MINOR version with cargo-release..."
@@ -109,7 +100,7 @@ release-minor: preflight
 	@echo "  - (Publish step is manual, see make publish)"
 	@echo ""
 	@read -p "Continue? [y/N] " confirm && [ "$$confirm" = "y" ] || exit 1
-	cargo release minor --execute --no-confirm
+	cargo release minor --execute --no-confirm --no-publish
 
 release: release-patch
 

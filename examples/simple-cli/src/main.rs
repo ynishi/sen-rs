@@ -1,4 +1,4 @@
-use sen::{CliResult, State, SenRouter};
+use sen::{CliResult, State, SenRouter, init_subscriber, version_info, info, error};
 
 // ============================================
 // Application State
@@ -62,7 +62,7 @@ impl Commands {
 
         if args.len() < 2 {
             return Err(sen::CliError::user(
-                "No command specified. Usage: admin <status|build|test> [options]",
+                "No command specified. Usage: admin <status|build|test|version> [options]",
             ));
         }
 
@@ -76,8 +76,12 @@ impl Commands {
                 let filter = args.get(2).cloned();
                 Ok(Commands::Test(TestArgs { filter }))
             }
+            "--version" | "-V" | "version" => {
+                println!("{}", version_info());
+                std::process::exit(0);
+            }
             cmd => Err(sen::CliError::user(format!(
-                "Unknown command '{}'. Use: status, build, or test",
+                "Unknown command '{}'. Use: status, build, test, or --version",
                 cmd
             ))),
         }
@@ -92,6 +96,7 @@ mod handlers {
     use super::*;
 
     pub fn status(state: State<AppState>) -> CliResult<String> {
+        info!("Fetching project status");
         let app = state.get();
 
         Ok(format!(
@@ -105,6 +110,7 @@ mod handlers {
     }
 
     pub fn build(state: State<AppState>, args: BuildArgs) -> CliResult<String> {
+        info!(release = args.release, "Starting build");
         let app = state.get();
 
         let mut cmd = app.config.build_command.clone();
@@ -112,14 +118,17 @@ mod handlers {
             cmd.push_str(" --release");
         }
 
+        info!(command = %cmd, "Build command prepared");
         Ok(format!("Would execute: {}", cmd))
     }
 
     pub fn test(state: State<AppState>, args: TestArgs) -> CliResult<String> {
+        info!(filter = ?args.filter, "Starting tests");
         let app = state.get();
 
         // Demo: validation error
         if args.filter.as_deref() == Some("invalid") {
+            error!("Invalid test filter specified");
             return Err(sen::CliError::user("Test filter 'invalid' matches no tests"));
         }
 
@@ -128,6 +137,7 @@ mod handlers {
             cmd.push_str(&format!(" {}", filter));
         }
 
+        info!(command = %cmd, "Test command prepared");
         Ok(format!("Would execute: {}", cmd))
     }
 }
@@ -137,6 +147,9 @@ mod handlers {
 // ============================================
 
 fn main() {
+    // 0. Initialize tracing (controlled by RUST_LOG environment variable)
+    init_subscriber();
+
     // 1. Load application state
     let app_state = match AppState::load() {
         Ok(state) => state,
