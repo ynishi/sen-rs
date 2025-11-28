@@ -32,7 +32,55 @@ Or use `cargo add`:
 cargo add sen
 ```
 
-### Example
+### Example (Router API - Recommended)
+
+```rust
+use sen::{CliResult, State, Router};
+
+// 1. Define application state
+#[derive(Clone)]
+pub struct AppState {
+    pub config: String,
+}
+
+// 2. Implement handlers as async functions
+mod handlers {
+    use super::*;
+
+    pub async fn status(state: State<AppState>) -> CliResult<String> {
+        let app = state.read().await;
+        Ok(format!("Config: {}", app.config))
+    }
+
+    pub async fn build(state: State<AppState>) -> CliResult<()> {
+        println!("Building...");
+        Ok(())
+    }
+}
+
+// 3. Wire it up with Router (< 20 lines of main.rs)
+#[tokio::main]
+async fn main() {
+    let state = AppState {
+        config: "production".to_string(),
+    };
+
+    let router = Router::new()
+        .route("status", handlers::status)
+        .route("build", handlers::build)
+        .with_state(state);
+
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let response = router.execute(&args).await;
+
+    if !response.output.is_empty() {
+        println!("{}", response.output);
+    }
+    std::process::exit(response.exit_code);
+}
+```
+
+### Example (Enum API - Type-safe alternative)
 
 ```rust
 use sen::{CliResult, State, SenRouter};
@@ -124,24 +172,35 @@ my-cli/
 
 ## 🎨 Key Features
 
-### 1. Type-Safe Routing
+### 1. Flexible Routing - Choose Your Style
 
-Commands are enums, not strings:
-
+**Router API (Axum-style)** - Dynamic and flexible:
 ```rust
-// ✅ Compile-time checked
+// Register handlers dynamically
+let router = Router::new()
+    .route("status", handlers::status)
+    .route("build", handlers::build)
+    .with_state(app_state);
+
+// Easy to integrate with existing CLIs
+let response = router.execute(&args).await;
+```
+
+**Enum API** - Compile-time safety:
+```rust
 #[derive(SenRouter)]
 #[sen(state = AppState)]
 enum Commands {
     #[sen(handler = handlers::status)]  // Typo? Compile error!
     Status,
 }
-
-// ❌ Runtime dispatch (other frameworks)
-router.add("/status", handlers::status);  // Typo? Runtime panic!
 ```
 
-### 2. Flexible Handler Signatures (Axum-style)
+Both approaches are supported - choose based on your needs:
+- **Router API**: Better for gradual migration, dynamic routes, existing CLIs
+- **Enum API**: Better for new projects, compile-time exhaustiveness checking
+
+### 2. Axum-Style Handler Signatures
 
 ```rust
 // Order doesn't matter!

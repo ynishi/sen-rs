@@ -81,6 +81,10 @@ pub use tracing_support::{
 #[cfg(feature = "build-info")]
 pub use build_info::{version_info, version_short};
 
+// Re-export clap for convenience when using clap integration
+#[cfg(feature = "clap")]
+pub use clap;
+
 // ============================================================================
 // Core Types
 // ============================================================================
@@ -387,6 +391,509 @@ impl<T: IntoResponse> IntoResponse for CliResult<T> {
 }
 
 // ============================================================================
+// Router & Handler System (Axum-style)
+// ============================================================================
+
+use std::collections::HashMap;
+use std::future::Future;
+use std::marker::PhantomData;
+use std::pin::Pin;
+
+/// Boxed future for type erasure
+type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+
+/// Handler trait - allows functions with various signatures to be used as handlers.
+///
+/// This trait is automatically implemented for async functions with compatible signatures.
+/// Inspired by Axum's handler system.
+pub trait Handler<T, S>: Clone + Send + Sync + Sized + 'static {
+    /// Future type returned by the handler
+    type Future: Future<Output = Response> + Send + 'static;
+
+    /// Call the handler with state and arguments
+    fn call(self, state: State<S>, args: Vec<String>) -> Self::Future;
+}
+
+/// Type-erased handler for storage in Router
+trait ErasedHandler<S>: Send + Sync {
+    fn call_boxed<'a>(
+        &'a self,
+        state: State<S>,
+        args: Vec<String>,
+    ) -> BoxFuture<'a, Response>;
+
+    fn clone_box(&self) -> Box<dyn ErasedHandler<S>>;
+}
+
+impl<S> Clone for Box<dyn ErasedHandler<S>> {
+    fn clone(&self) -> Self {
+        self.clone_box()
+    }
+}
+
+/// Wrapper that implements ErasedHandler for any Handler
+struct HandlerService<H, T, S> {
+    handler: H,
+    _marker: PhantomData<fn() -> (T, S)>,
+}
+
+impl<H, T, S> HandlerService<H, T, S> {
+    fn new(handler: H) -> Self {
+        Self {
+            handler,
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<H, T, S> Clone for HandlerService<H, T, S>
+where
+    H: Clone,
+{
+    fn clone(&self) -> Self {
+        Self {
+            handler: self.handler.clone(),
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<H, T, S> ErasedHandler<S> for HandlerService<H, T, S>
+where
+    H: Handler<T, S>,
+    S: Send + Sync + 'static,
+    T: 'static,
+{
+    fn call_boxed<'a>(
+        &'a self,
+        state: State<S>,
+        args: Vec<String>,
+    ) -> BoxFuture<'a, Response> {
+        let handler = self.handler.clone();
+        Box::pin(async move { handler.call(state, args).await })
+    }
+
+    fn clone_box(&self) -> Box<dyn ErasedHandler<S>> {
+        Box::new(self.clone())
+    }
+}
+
+/// Router for CLI commands.
+///
+/// Similar to Axum's Router, this allows dynamic registration of command handlers.
+/// The generic parameter `S` represents the "missing state type" - handlers need
+/// `State<S>` to execute.
+///
+/// # Example
+///
+/// ```ignore
+/// use sen::{Router, State, CliResult};
+///
+/// async fn status(state: State<AppState>) -> CliResult<String> {
+///     Ok("Status: OK".to_string())
+/// }
+///
+/// let router = Router::new()
+///     .route("status", status)
+///     .with_state(app_state);
+///
+/// let response = router.execute(&["status"]).await;
+/// ```
+pub struct Router<S = ()> {
+    routes: HashMap<String, Box<dyn ErasedHandler<S>>>,
+    _marker: PhantomData<S>,
+}
+
+impl<S> Default for Router<S>
+where
+    S: Send + Sync + Clone + 'static,
+{
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<S> Router<S>
+where
+    S: Send + Sync + Clone + 'static,
+{
+    /// Create a new empty router.
+    pub fn new() -> Self {
+        Self {
+            routes: HashMap::new(),
+            _marker: PhantomData,
+        }
+    }
+
+    /// Register a handler for a command.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// router.route("build", handlers::build)
+    /// ```
+    pub fn route<H, T: 'static>(mut self, command: impl Into<String>, handler: H) -> Self
+    where
+        H: Handler<T, S>,
+    {
+        let command_name = command.into();
+        if self.routes.contains_key(&command_name) {
+            panic!("Duplicate route: {}", command_name);
+        }
+        self.routes
+            .insert(command_name, Box::new(HandlerService::new(handler)));
+        self
+    }
+
+    /// Nest a router under a prefix.
+    ///
+    /// This allows organizing commands into hierarchies (subcommands).
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let db_router = Router::new()
+    ///     .route("create", handlers::db::create)
+    ///     .route("list", handlers::db::list)
+    ///     .route("delete", handlers::db::delete);
+    ///
+    /// let app = Router::new()
+    ///     .nest("db", db_router)
+    ///     .nest("server", server_router)
+    ///     .with_state(state);
+    ///
+    /// // Routes: "db:create", "db:list", "db:delete", "server:start", ...
+    /// ```
+    pub fn nest(mut self, prefix: impl Into<String>, router: Router<S>) -> Self {
+        let prefix = prefix.into();
+
+        // Add all routes from the nested router with the prefix
+        for (path, handler) in router.routes {
+            let nested_path = if path.is_empty() {
+                prefix.clone()
+            } else {
+                format!("{}:{}", prefix, path)
+            };
+
+            if self.routes.contains_key(&nested_path) {
+                panic!("Duplicate route: {}", nested_path);
+            }
+
+            self.routes.insert(nested_path, handler);
+        }
+
+        self
+    }
+
+    /// Provide the application state, converting `Router<S>` to `Router<()>`.
+    ///
+    /// This follows Axum's pattern where the type system ensures all required
+    /// state is provided before the router can execute requests.
+    pub fn with_state(self, state: S) -> Router<()> {
+        let routes: HashMap<String, Box<dyn ErasedHandler<()>>> = self
+            .routes
+            .into_iter()
+            .map(|(cmd, handler)| {
+                let state = state.clone();
+                let boxed: Box<dyn ErasedHandler<()>> =
+                    Box::new(StatefulHandler { handler, state });
+                (cmd, boxed)
+            })
+            .collect();
+
+        Router {
+            routes,
+            _marker: PhantomData,
+        }
+    }
+}
+
+/// Handler that has been bound to a state
+struct StatefulHandler<S> {
+    handler: Box<dyn ErasedHandler<S>>,
+    state: S,
+}
+
+impl<S> Clone for StatefulHandler<S>
+where
+    S: Clone,
+{
+    fn clone(&self) -> Self {
+        Self {
+            handler: self.handler.clone(),
+            state: self.state.clone(),
+        }
+    }
+}
+
+impl<S> ErasedHandler<()> for StatefulHandler<S>
+where
+    S: Clone + Send + Sync + 'static,
+{
+    fn call_boxed<'a>(
+        &'a self,
+        _state: State<()>,
+        args: Vec<String>,
+    ) -> BoxFuture<'a, Response> {
+        let handler = self.handler.clone();
+        let state = State::new(self.state.clone());
+        Box::pin(async move { handler.call_boxed(state, args).await })
+    }
+
+    fn clone_box(&self) -> Box<dyn ErasedHandler<()>> {
+        Box::new(self.clone())
+    }
+}
+
+impl Router<()> {
+    /// Execute a command with the given arguments.
+    ///
+    /// Supports both flat and nested command structures:
+    /// - `["build"]` → matches route "build"
+    /// - `["db", "create"]` → matches route "db:create"
+    /// - `["db", "backup", "create"]` → matches route "db:backup:create"
+    ///
+    /// Returns a Response with exit code and output.
+    pub async fn execute(&self, args: &[String]) -> Response {
+        if args.is_empty() {
+            let err: CliResult<()> = Err(CliError::user("No command specified"));
+            return err.into_response();
+        }
+
+        // Try to match nested commands first (longest match wins)
+        // e.g., ["db", "create", "--flag"] tries:
+        //   1. "db:create" (found!)
+        //   2. "db" (fallback)
+        let (matched_handler, remaining_args) = self.find_route(args);
+
+        match matched_handler {
+            Some(handler) => {
+                let state = State::new(());
+                handler.call_boxed(state, remaining_args).await
+            }
+            None => {
+                let command = args.join(" ");
+                let err: CliResult<()> = Err(CliError::user(format!("Unknown command: {}", command)));
+                err.into_response()
+            }
+        }
+    }
+
+    /// Find the longest matching route for the given arguments.
+    ///
+    /// Returns the matched handler and remaining arguments.
+    fn find_route(&self, args: &[String]) -> (Option<&Box<dyn ErasedHandler<()>>>, Vec<String>) {
+        // Try matching from longest to shortest
+        for depth in (1..=args.len()).rev() {
+            let route_parts = &args[..depth];
+            let route_key = route_parts.join(":");
+
+            if let Some(handler) = self.routes.get(&route_key) {
+                let remaining = args[depth..].to_vec();
+                return (Some(handler), remaining);
+            }
+        }
+
+        (None, args.to_vec())
+    }
+}
+
+// ============================================================================
+// Args Extractor (Axum-style)
+// ============================================================================
+
+/// Extractor for command-line arguments.
+///
+/// Similar to Axum's `Path` or `Query`, this allows handlers to receive
+/// parsed arguments.
+///
+/// # Example
+///
+/// ```ignore
+/// #[derive(Debug)]
+/// struct BuildArgs {
+///     release: bool,
+/// }
+///
+/// impl FromArgs for BuildArgs {
+///     fn from_args(args: &[String]) -> Result<Self, CliError> {
+///         Ok(BuildArgs {
+///             release: args.get(0).map(|s| s == "--release").unwrap_or(false),
+///         })
+///     }
+/// }
+///
+/// async fn build(State(app): State<AppState>, Args(args): Args<BuildArgs>) -> CliResult<String> {
+///     if args.release {
+///         Ok("Release build".to_string())
+///     } else {
+///         Ok("Debug build".to_string())
+///     }
+/// }
+/// ```
+#[derive(Debug, Clone)]
+pub struct Args<T>(pub T);
+
+/// Trait for parsing command-line arguments into a type.
+///
+/// This is similar to Axum's `FromRequest` trait.
+pub trait FromArgs: Sized {
+    /// Parse arguments into Self, or return an error.
+    fn from_args(args: &[String]) -> Result<Self, CliError>;
+}
+
+// ============================================================================
+// Clap Integration (when clap feature is enabled)
+// ============================================================================
+
+#[cfg(feature = "clap")]
+/// Blanket implementation: any type implementing `clap::Parser` can be used with `Args<T>`.
+///
+/// This allows seamless integration with clap's derive macros:
+///
+/// ```ignore
+/// use clap::Parser;
+/// use sen::{Args, CliResult, State};
+///
+/// #[derive(Parser)]
+/// struct BuildArgs {
+///     /// Database name
+///     name: String,
+///
+///     /// Build in release mode
+///     #[arg(long)]
+///     release: bool,
+///
+///     /// Target architecture (can also be set via env var)
+///     #[arg(long, env = "BUILD_TARGET")]
+///     target: Option<String>,
+/// }
+///
+/// async fn build(
+///     state: State<AppState>,
+///     Args(args): Args<BuildArgs>  // Clap automatically parses!
+/// ) -> CliResult<String> {
+///     if args.release {
+///         Ok("Building in release mode".to_string())
+///     } else {
+///         Ok("Building in debug mode".to_string())
+///     }
+/// }
+/// ```
+impl<T> FromArgs for T
+where
+    T: clap::Parser,
+{
+    fn from_args(args: &[String]) -> Result<Self, CliError> {
+        // Clap expects the command name as the first argument
+        // Since we're parsing subcommand args, we need to prepend a dummy command name
+        let args_with_cmd = std::iter::once("cmd".to_string())
+            .chain(args.iter().cloned())
+            .collect::<Vec<_>>();
+
+        T::try_parse_from(args_with_cmd)
+            .map_err(|e| CliError::user(e.to_string()))
+    }
+}
+
+// ============================================================================
+// Manual FromArgs implementations (when clap feature is NOT enabled)
+// ============================================================================
+
+#[cfg(not(feature = "clap"))]
+// Implement FromArgs for () (no args needed)
+impl FromArgs for () {
+    fn from_args(_args: &[String]) -> Result<Self, CliError> {
+        Ok(())
+    }
+}
+
+#[cfg(not(feature = "clap"))]
+// Implement FromArgs for Vec<String> (raw args)
+impl FromArgs for Vec<String> {
+    fn from_args(args: &[String]) -> Result<Self, CliError> {
+        Ok(args.to_vec())
+    }
+}
+
+// ============================================================================
+// Handler Implementations for Common Function Signatures
+// ============================================================================
+
+// Handler for: async fn(State<S>) -> impl IntoResponse
+impl<F, Fut, S, Res> Handler<(State<S>,), S> for F
+where
+    F: Fn(State<S>) -> Fut + Clone + Send + Sync + 'static,
+    Fut: Future<Output = Res> + Send + 'static,
+    Res: IntoResponse + 'static,
+    S: Send + Sync + Clone + 'static,
+{
+    type Future = Pin<Box<dyn Future<Output = Response> + Send>>;
+
+    fn call(self, state: State<S>, _args: Vec<String>) -> Self::Future {
+        Box::pin(async move {
+            let result = self(state).await;
+            result.into_response()
+        })
+    }
+}
+
+// Handler for: async fn(State<S>, Args<T>) -> impl IntoResponse
+impl<F, Fut, S, T, Res> Handler<(State<S>, Args<T>), S> for F
+where
+    F: Fn(State<S>, Args<T>) -> Fut + Clone + Send + Sync + 'static,
+    Fut: Future<Output = Res> + Send + 'static,
+    Res: IntoResponse + 'static,
+    T: FromArgs + Send + 'static,
+    S: Send + Sync + Clone + 'static,
+{
+    type Future = Pin<Box<dyn Future<Output = Response> + Send>>;
+
+    fn call(self, state: State<S>, args: Vec<String>) -> Self::Future {
+        Box::pin(async move {
+            // Parse args
+            let parsed_args = match T::from_args(&args) {
+                Ok(args) => args,
+                Err(e) => {
+                    let result: CliResult<()> = Err(e);
+                    return result.into_response();
+                }
+            };
+
+            let result = self(state, Args(parsed_args)).await;
+            result.into_response()
+        })
+    }
+}
+
+// Handler for: async fn(Args<T>) -> impl IntoResponse (no state)
+impl<F, Fut, T, Res> Handler<(Args<T>,), ()> for F
+where
+    F: Fn(Args<T>) -> Fut + Clone + Send + Sync + 'static,
+    Fut: Future<Output = Res> + Send + 'static,
+    Res: IntoResponse + 'static,
+    T: FromArgs + Send + 'static,
+{
+    type Future = Pin<Box<dyn Future<Output = Response> + Send>>;
+
+    fn call(self, _state: State<()>, args: Vec<String>) -> Self::Future {
+        Box::pin(async move {
+            // Parse args
+            let parsed_args = match T::from_args(&args) {
+                Ok(args) => args,
+                Err(e) => {
+                    let result: CliResult<()> = Err(e);
+                    return result.into_response();
+                }
+            };
+
+            let result = self(Args(parsed_args)).await;
+            result.into_response()
+        })
+    }
+}
+
+// ============================================================================
 // Tests
 // ============================================================================
 
@@ -462,6 +969,460 @@ mod tests {
     fn test_result_err_into_response() {
         let result: CliResult<String> = Err(CliError::user("failure"));
         let response = result.into_response();
+        assert_eq!(response.exit_code, 1);
+    }
+
+    // ========================================
+    // Router Tests
+    // ========================================
+
+    #[tokio::test]
+    async fn test_router_basic() {
+        #[derive(Clone)]
+        struct AppState {
+            value: i32,
+        }
+
+        async fn get_value(state: State<AppState>) -> CliResult<String> {
+            let app = state.read().await;
+            Ok(format!("Value: {}", app.value))
+        }
+
+        let state = AppState { value: 42 };
+        let router = Router::new()
+            .route("status", get_value)
+            .with_state(state);
+
+        let response = router.execute(&["status".to_string()]).await;
+        assert_eq!(response.exit_code, 0);
+        assert!(matches!(response.output, Output::Text(_)));
+    }
+
+    #[tokio::test]
+    async fn test_router_unknown_command() {
+        let router: Router<()> = Router::new().with_state(());
+        let response = router.execute(&["unknown".to_string()]).await;
+        assert_eq!(response.exit_code, 1);
+    }
+
+    #[tokio::test]
+    async fn test_router_no_command() {
+        let router: Router<()> = Router::new().with_state(());
+        let response = router.execute(&[]).await;
+        assert_eq!(response.exit_code, 1);
+    }
+
+    #[tokio::test]
+    async fn test_router_multiple_routes() {
+        #[derive(Clone)]
+        struct AppState {
+            count: i32,
+        }
+
+        async fn status(_state: State<AppState>) -> CliResult<String> {
+            Ok("OK".to_string())
+        }
+
+        async fn version(_state: State<AppState>) -> CliResult<String> {
+            Ok("v1.0.0".to_string())
+        }
+
+        let state = AppState { count: 0 };
+        let router = Router::new()
+            .route("status", status)
+            .route("version", version)
+            .with_state(state);
+
+        let response1 = router.execute(&["status".to_string()]).await;
+        assert_eq!(response1.exit_code, 0);
+
+        let response2 = router.execute(&["version".to_string()]).await;
+        assert_eq!(response2.exit_code, 0);
+    }
+
+    // ========================================
+    // Args Extractor Tests
+    // ========================================
+
+    #[tokio::test]
+    async fn test_router_with_args() {
+        #[derive(Clone)]
+        struct AppState {
+            base_cmd: String,
+        }
+
+        #[derive(Debug)]
+        struct BuildArgs {
+            release: bool,
+        }
+
+        impl FromArgs for BuildArgs {
+            fn from_args(args: &[String]) -> Result<Self, CliError> {
+                Ok(BuildArgs {
+                    release: args.get(0).map(|s| s == "--release").unwrap_or(false),
+                })
+            }
+        }
+
+        async fn build(_state: State<AppState>, Args(args): Args<BuildArgs>) -> CliResult<String> {
+            if args.release {
+                Ok("release".to_string())
+            } else {
+                Ok("debug".to_string())
+            }
+        }
+
+        let state = AppState {
+            base_cmd: "cargo build".to_string(),
+        };
+        let router = Router::new().route("build", build).with_state(state);
+
+        // Test with --release flag
+        let response1 = router
+            .execute(&["build".to_string(), "--release".to_string()])
+            .await;
+        assert_eq!(response1.exit_code, 0);
+        if let Output::Text(output) = response1.output {
+            assert_eq!(output, "release");
+        }
+
+        // Test without flag
+        let response2 = router.execute(&["build".to_string()]).await;
+        assert_eq!(response2.exit_code, 0);
+        if let Output::Text(output) = response2.output {
+            assert_eq!(output, "debug");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_router_args_no_state() {
+        #[derive(Debug)]
+        struct EchoArgs {
+            message: String,
+        }
+
+        impl FromArgs for EchoArgs {
+            fn from_args(args: &[String]) -> Result<Self, CliError> {
+                let message = args.get(0).cloned().unwrap_or_else(|| "".to_string());
+                Ok(EchoArgs { message })
+            }
+        }
+
+        async fn echo(Args(args): Args<EchoArgs>) -> CliResult<String> {
+            Ok(args.message)
+        }
+
+        let router = Router::new().route("echo", echo).with_state(());
+
+        let response = router
+            .execute(&["echo".to_string(), "Hello!".to_string()])
+            .await;
+        assert_eq!(response.exit_code, 0);
+        if let Output::Text(output) = response.output {
+            assert_eq!(output, "Hello!");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_router_args_parse_error() {
+        #[derive(Debug)]
+        struct StrictArgs;
+
+        impl FromArgs for StrictArgs {
+            fn from_args(args: &[String]) -> Result<Self, CliError> {
+                if args.is_empty() {
+                    Err(CliError::user("Arguments required"))
+                } else {
+                    Ok(StrictArgs)
+                }
+            }
+        }
+
+        async fn strict(Args(_args): Args<StrictArgs>) -> CliResult<String> {
+            Ok("success".to_string())
+        }
+
+        let router = Router::new().route("strict", strict).with_state(());
+
+        // Should fail with no args
+        let response = router.execute(&["strict".to_string()]).await;
+        assert_eq!(response.exit_code, 1);
+    }
+
+    // ========================================
+    // Router::nest() Tests
+    // ========================================
+
+    #[tokio::test]
+    async fn test_router_nest_basic() {
+        #[derive(Clone)]
+        struct AppState;
+
+        async fn db_create(_state: State<AppState>) -> CliResult<String> {
+            Ok("DB created".to_string())
+        }
+
+        async fn db_list(_state: State<AppState>) -> CliResult<String> {
+            Ok("DB list".to_string())
+        }
+
+        let db_router = Router::new()
+            .route("create", db_create)
+            .route("list", db_list);
+
+        let router = Router::new()
+            .nest("db", db_router)
+            .with_state(AppState);
+
+        // Test nested command: "db create"
+        let response = router.execute(&["db".to_string(), "create".to_string()]).await;
+        assert_eq!(response.exit_code, 0);
+        if let Output::Text(output) = response.output {
+            assert_eq!(output, "DB created");
+        }
+
+        // Test nested command: "db list"
+        let response = router.execute(&["db".to_string(), "list".to_string()]).await;
+        assert_eq!(response.exit_code, 0);
+        if let Output::Text(output) = response.output {
+            assert_eq!(output, "DB list");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_router_nest_with_args() {
+        #[derive(Clone)]
+        struct AppState;
+
+        #[derive(Debug)]
+        struct CreateArgs {
+            name: String,
+        }
+
+        impl FromArgs for CreateArgs {
+            fn from_args(args: &[String]) -> Result<Self, CliError> {
+                let name = args.get(0).cloned().unwrap_or_else(|| "default".to_string());
+                Ok(CreateArgs { name })
+            }
+        }
+
+        async fn db_create(_state: State<AppState>, Args(args): Args<CreateArgs>) -> CliResult<String> {
+            Ok(format!("Created DB: {}", args.name))
+        }
+
+        let db_router = Router::new().route("create", db_create);
+
+        let router = Router::new()
+            .nest("db", db_router)
+            .with_state(AppState);
+
+        // Test: "db create mydb"
+        let response = router.execute(&[
+            "db".to_string(),
+            "create".to_string(),
+            "mydb".to_string(),
+        ]).await;
+
+        assert_eq!(response.exit_code, 0);
+        if let Output::Text(output) = response.output {
+            assert_eq!(output, "Created DB: mydb");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_router_nest_multiple_levels() {
+        #[derive(Clone)]
+        struct AppState;
+
+        async fn status(_state: State<AppState>) -> CliResult<String> {
+            Ok("OK".to_string())
+        }
+
+        async fn db_create(_state: State<AppState>) -> CliResult<String> {
+            Ok("DB created".to_string())
+        }
+
+        async fn server_start(_state: State<AppState>) -> CliResult<String> {
+            Ok("Server started".to_string())
+        }
+
+        let db_router = Router::new().route("create", db_create);
+        let server_router = Router::new().route("start", server_start);
+
+        let router = Router::new()
+            .route("status", status)  // Top-level command
+            .nest("db", db_router)     // Nested commands
+            .nest("server", server_router)
+            .with_state(AppState);
+
+        // Top-level command
+        let response = router.execute(&["status".to_string()]).await;
+        assert_eq!(response.exit_code, 0);
+
+        // Nested command: db create
+        let response = router.execute(&["db".to_string(), "create".to_string()]).await;
+        assert_eq!(response.exit_code, 0);
+
+        // Nested command: server start
+        let response = router.execute(&["server".to_string(), "start".to_string()]).await;
+        assert_eq!(response.exit_code, 0);
+    }
+
+    #[tokio::test]
+    async fn test_router_nest_unknown_subcommand() {
+        #[derive(Clone)]
+        struct AppState;
+
+        async fn db_create(_state: State<AppState>) -> CliResult<String> {
+            Ok("DB created".to_string())
+        }
+
+        let db_router = Router::new().route("create", db_create);
+        let router = Router::new().nest("db", db_router).with_state(AppState);
+
+        // Unknown subcommand
+        let response = router.execute(&["db".to_string(), "delete".to_string()]).await;
+        assert_eq!(response.exit_code, 1);
+    }
+
+    // ========================================
+    // Clap Integration Tests
+    // ========================================
+
+    #[tokio::test]
+    async fn test_clap_integration_basic() {
+        use clap::Parser;
+
+        #[derive(Clone)]
+        struct AppState;
+
+        #[derive(Parser, Debug)]
+        struct BuildArgs {
+            /// Database name
+            name: String,
+
+            /// Build in release mode
+            #[arg(long)]
+            release: bool,
+        }
+
+        async fn build(_state: State<AppState>, Args(args): Args<BuildArgs>) -> CliResult<String> {
+            if args.release {
+                Ok(format!("Release build: {}", args.name))
+            } else {
+                Ok(format!("Debug build: {}", args.name))
+            }
+        }
+
+        let router = Router::new().route("build", build).with_state(AppState);
+
+        // Test with --release
+        let response = router.execute(&[
+            "build".to_string(),
+            "myapp".to_string(),
+            "--release".to_string(),
+        ]).await;
+        assert_eq!(response.exit_code, 0);
+        if let Output::Text(output) = response.output {
+            assert_eq!(output, "Release build: myapp");
+        }
+
+        // Test without --release
+        let response = router.execute(&[
+            "build".to_string(),
+            "myapp".to_string(),
+        ]).await;
+        assert_eq!(response.exit_code, 0);
+        if let Output::Text(output) = response.output {
+            assert_eq!(output, "Debug build: myapp");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_clap_integration_with_env() {
+        use clap::Parser;
+
+        #[derive(Clone)]
+        struct AppState;
+
+        #[derive(Parser, Debug)]
+        struct DeployArgs {
+            /// App name
+            app: String,
+
+            /// Target environment (from env var or flag)
+            #[arg(long, env = "DEPLOY_ENV", default_value = "production")]
+            env: String,
+        }
+
+        async fn deploy(_state: State<AppState>, Args(args): Args<DeployArgs>) -> CliResult<String> {
+            Ok(format!("Deploying {} to {}", args.app, args.env))
+        }
+
+        let router = Router::new().route("deploy", deploy).with_state(AppState);
+
+        // Test with explicit --env flag
+        let response = router.execute(&[
+            "deploy".to_string(),
+            "myapp".to_string(),
+            "--env".to_string(),
+            "staging".to_string(),
+        ]).await;
+        assert_eq!(response.exit_code, 0);
+        if let Output::Text(output) = response.output {
+            assert_eq!(output, "Deploying myapp to staging");
+        }
+
+        // Test with default value
+        let response = router.execute(&[
+            "deploy".to_string(),
+            "myapp".to_string(),
+        ]).await;
+        assert_eq!(response.exit_code, 0);
+        if let Output::Text(output) = response.output {
+            assert_eq!(output, "Deploying myapp to production");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_clap_integration_validation() {
+        use clap::Parser;
+
+        #[derive(Clone)]
+        struct AppState;
+
+        #[derive(Parser, Debug)]
+        struct CreateArgs {
+            /// Name (required)
+            name: String,
+
+            /// Port number
+            #[arg(long, value_parser = clap::value_parser!(u16).range(1..=65535))]
+            port: Option<u16>,
+        }
+
+        async fn create(_state: State<AppState>, Args(args): Args<CreateArgs>) -> CliResult<String> {
+            Ok(format!("Created {} on port {:?}", args.name, args.port))
+        }
+
+        let router = Router::new().route("create", create).with_state(AppState);
+
+        // Valid port
+        let response = router.execute(&[
+            "create".to_string(),
+            "mydb".to_string(),
+            "--port".to_string(),
+            "3000".to_string(),
+        ]).await;
+        assert_eq!(response.exit_code, 0);
+
+        // Invalid port (out of range) - clap will return error
+        let response = router.execute(&[
+            "create".to_string(),
+            "mydb".to_string(),
+            "--port".to_string(),
+            "99999".to_string(),
+        ]).await;
         assert_eq!(response.exit_code, 1);
     }
 }

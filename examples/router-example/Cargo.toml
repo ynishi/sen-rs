@@ -1,0 +1,15 @@
+[package]
+name = "simple-cli"
+version = "0.1.0"
+edition = "2021"
+
+# Standalone package (not part of parent workspace)
+[workspace]
+
+[[bin]]
+name = "admin"
+path = "src/main.rs"
+
+[dependencies]
+sen = { path = "../../sen-rs" }
+tokio = { version = "1.42", features = ["full"] }

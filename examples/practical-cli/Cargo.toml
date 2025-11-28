@@ -1,0 +1,16 @@
+[package]
+name = "myctl"
+version = "0.1.0"
+edition = "2021"
+
+# Standalone package
+[workspace]
+
+[[bin]]
+name = "myctl"
+path = "src/main.rs"
+
+[dependencies]
+sen = { path = "../../sen-rs", features = ["clap"] }
+tokio = { version = "1.42", features = ["full"] }
+clap = { version = "4", features = ["derive", "env"] }

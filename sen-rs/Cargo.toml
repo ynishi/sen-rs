@@ -16,6 +16,7 @@ built = { version = "0.7", optional = true, features = ["chrono", "git2"] }
 tracing = { version = "0.1", optional = true }
 tracing-subscriber = { version = "0.3", optional = true, features = ["env-filter", "fmt", "json"] }
 tokio = { version = "1.42", features = ["full"] }
+clap = { version = "4", optional = true, features = ["derive", "env"] }
 
 [build-dependencies]
 built = { version = "0.7", features = ["chrono", "git2"] }
@@ -24,6 +25,7 @@ built = { version = "0.7", features = ["chrono", "git2"] }
 default = ["build-info", "tracing"]
 build-info = ["dep:built"]
 tracing = ["dep:tracing", "dep:tracing-subscriber"]
+clap = ["dep:clap"]
 
 [dev-dependencies]
-# Add test dependencies here as needed
+clap = { version = "4", features = ["derive", "env"] }
