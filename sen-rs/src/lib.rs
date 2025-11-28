@@ -60,8 +60,9 @@
 
 use std::sync::Arc;
 
-// Re-export the derive macro
+// Re-export macros
 pub use sen_rs_macros::SenRouter;
+pub use sen_rs_macros::sen;
 
 // Optional modules
 pub mod build_info;
@@ -402,6 +403,20 @@ use std::pin::Pin;
 /// Boxed future for type erasure
 type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
+/// Metadata for CLI application and commands.
+///
+/// This is used by the `#[sen(...)]` attribute macro to provide
+/// help generation and CLI documentation.
+#[derive(Debug, Clone)]
+pub struct RouterMetadata {
+    /// Application name
+    pub name: &'static str,
+    /// Version string (optional)
+    pub version: Option<&'static str>,
+    /// Short description
+    pub about: Option<&'static str>,
+}
+
 /// Handler trait - allows functions with various signatures to be used as handlers.
 ///
 /// This trait is automatically implemented for async functions with compatible signatures.
@@ -501,6 +516,7 @@ where
 /// ```
 pub struct Router<S = ()> {
     routes: HashMap<String, Box<dyn ErasedHandler<S>>>,
+    metadata: Option<RouterMetadata>,
     _marker: PhantomData<S>,
 }
 
@@ -521,6 +537,7 @@ where
     pub fn new() -> Self {
         Self {
             routes: HashMap::new(),
+            metadata: None,
             _marker: PhantomData,
         }
     }
@@ -585,6 +602,28 @@ where
         self
     }
 
+    /// Attach metadata to the router.
+    ///
+    /// This is typically used by the `#[sen(...)]` attribute macro to provide
+    /// CLI metadata for help generation.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let router = Router::new()
+    ///     .route("status", handlers::status)
+    ///     .with_metadata(RouterMetadata {
+    ///         name: "myctl",
+    ///         version: Some("1.0.0"),
+    ///         about: Some("My CLI tool"),
+    ///     })
+    ///     .with_state(state);
+    /// ```
+    pub fn with_metadata(mut self, metadata: RouterMetadata) -> Self {
+        self.metadata = Some(metadata);
+        self
+    }
+
     /// Provide the application state, converting `Router<S>` to `Router<()>`.
     ///
     /// This follows Axum's pattern where the type system ensures all required
@@ -603,6 +642,7 @@ where
 
         Router {
             routes,
+            metadata: self.metadata,
             _marker: PhantomData,
         }
     }
@@ -653,11 +693,24 @@ impl Router<()> {
     /// - `["db", "create"]` → matches route "db:create"
     /// - `["db", "backup", "create"]` → matches route "db:backup:create"
     ///
+    /// Special handling:
+    /// - `--help` or `-h` → displays help message
+    /// - `version` → displays version (if metadata.version is set)
+    ///
     /// Returns a Response with exit code and output.
     pub async fn execute(&self, args: &[String]) -> Response {
+        // Handle --help flag
+        if args.contains(&"--help".to_string()) || args.contains(&"-h".to_string()) {
+            return self.generate_help(args);
+        }
+
         if args.is_empty() {
-            let err: CliResult<()> = Err(CliError::user("No command specified"));
-            return err.into_response();
+            return self.generate_help(&[]);
+        }
+
+        // Handle built-in version command
+        if args.len() == 1 && (args[0] == "version" || args[0] == "--version" || args[0] == "-V") {
+            return self.handle_version();
         }
 
         // Try to match nested commands first (longest match wins)
@@ -677,6 +730,65 @@ impl Router<()> {
                 err.into_response()
             }
         }
+    }
+
+    /// Generate help message based on router metadata and available commands.
+    fn generate_help(&self, _args: &[String]) -> Response {
+        let mut help = String::new();
+
+        if let Some(meta) = &self.metadata {
+            help.push_str(&format!("{}", meta.name));
+            if let Some(version) = meta.version {
+                help.push_str(&format!(" {}", version));
+            }
+            help.push('\n');
+
+            if let Some(about) = meta.about {
+                help.push_str(&format!("{}\n", about));
+            }
+            help.push('\n');
+        }
+
+        help.push_str("Usage: ");
+        if let Some(meta) = &self.metadata {
+            help.push_str(meta.name);
+        } else {
+            help.push_str("<command>");
+        }
+        help.push_str(" [OPTIONS] <COMMAND>\n\n");
+
+        help.push_str("Commands:\n");
+        let mut commands: Vec<_> = self.routes.keys().collect();
+        commands.sort();
+
+        for cmd in commands {
+            help.push_str(&format!("  {}\n", cmd));
+        }
+
+        help.push_str("\nOptions:\n");
+        help.push_str("  -h, --help     Show help\n");
+        if self.metadata.as_ref().and_then(|m| m.version).is_some() {
+            help.push_str("  -V, --version  Show version\n");
+        }
+
+        Response::text(help)
+    }
+
+    /// Handle version command.
+    fn handle_version(&self) -> Response {
+        if let Some(meta) = &self.metadata {
+            if let Some(version) = meta.version {
+                return Response::text(format!("{} {}", meta.name, version));
+            }
+        }
+
+        #[cfg(feature = "build-info")]
+        {
+            return Response::text(crate::version_info());
+        }
+
+        #[cfg(not(feature = "build-info"))]
+        Response::text("version information not available")
     }
 
     /// Find the longest matching route for the given arguments.

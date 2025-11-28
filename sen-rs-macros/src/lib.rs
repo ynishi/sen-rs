@@ -1,6 +1,6 @@
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{parse_macro_input, Data, DeriveInput, Fields};
+use syn::{parse_macro_input, Data, DeriveInput, Fields, ItemFn, Token, parse::{Parse, ParseStream}};
 
 /// Derives the SenRouter trait for an enum, generating the `execute()` method.
 ///
@@ -140,4 +140,114 @@ fn extract_handler(attrs: &[syn::Attribute]) -> Option<syn::Path> {
         }
     }
     None
+}
+
+/// Struct to parse #[sen(...)] attributes
+struct SenAttrs {
+    name: Option<String>,
+    version: Option<String>,
+    about: Option<String>,
+}
+
+impl Parse for SenAttrs {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let mut name = None;
+        let mut version = None;
+        let mut about = None;
+
+        while !input.is_empty() {
+            let ident: syn::Ident = input.parse()?;
+            input.parse::<Token![=]>()?;
+            let value: syn::LitStr = input.parse()?;
+
+            match ident.to_string().as_str() {
+                "name" => name = Some(value.value()),
+                "version" => version = Some(value.value()),
+                "about" => about = Some(value.value()),
+                _ => {}
+            }
+
+            if !input.is_empty() {
+                input.parse::<Token![,]>()?;
+            }
+        }
+
+        Ok(SenAttrs {
+            name,
+            version,
+            about,
+        })
+    }
+}
+
+/// Attribute macro for Router functions to attach CLI metadata.
+///
+/// # Usage
+///
+/// ```ignore
+/// #[sen(
+///     name = "myctl",
+///     version = "1.0.0",
+///     about = "Cloud Resource Management CLI"
+/// )]
+/// fn build_router(state: AppState) -> Router<()> {
+///     Router::new()
+///         .nest("db", db_router)
+///         .with_state(state)
+/// }
+/// ```
+///
+/// This expands to:
+///
+/// ```ignore
+/// fn build_router(state: AppState) -> Router<()> {
+///     let __router = {
+///         Router::new()
+///             .nest("db", db_router)
+///             .with_state(state)
+///     };
+///     __router.with_metadata(sen::RouterMetadata {
+///         name: "myctl",
+///         version: Some("1.0.0"),
+///         about: Some("Cloud Resource Management CLI"),
+///     })
+/// }
+/// ```
+#[proc_macro_attribute]
+pub fn sen(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(item as ItemFn);
+    let attrs = parse_macro_input!(attr as SenAttrs);
+
+    let name = attrs.name.expect("Missing 'name' attribute in #[sen(...)]");
+
+    let fn_vis = &input.vis;
+    let fn_sig = &input.sig;
+    let fn_block = &input.block;
+
+    // Build metadata construction
+    let version_expr = if let Some(v) = attrs.version {
+        quote! { Some(#v) }
+    } else {
+        quote! { None }
+    };
+
+    let about_expr = if let Some(a) = attrs.about {
+        quote! { Some(#a) }
+    } else {
+        quote! { None }
+    };
+
+    // Generate the wrapped function
+    let expanded = quote! {
+        #fn_vis #fn_sig {
+            let __router = #fn_block;
+            __router.with_metadata(sen::RouterMetadata {
+                name: #name,
+                version: #version_expr,
+                about: #about_expr,
+            })
+        }
+    };
+
+    TokenStream::from(expanded)
 }

@@ -492,6 +492,11 @@ mod handlers {
 // Router Setup with nest() (New!)
 // ============================================
 
+#[sen::sen(
+    name = "myctl",
+    version = "1.0.0",
+    about = "Cloud Resource Management CLI"
+)]
 fn build_router(state: AppState) -> Router<()> {
     // Create sub-routers for each resource
     let db_router = Router::new()
@@ -555,11 +560,6 @@ async fn main() {
         .filter(|a| !a.starts_with("--verbose") && !a.starts_with("-v") && !a.starts_with("--config"))
         .collect();
 
-    if args.is_empty() {
-        print_usage();
-        std::process::exit(0);
-    }
-
     // Build router and execute
     let router = build_router(app_state);
     let response = router.execute(&args).await;
@@ -571,49 +571,6 @@ async fn main() {
     std::process::exit(response.exit_code);
 }
 
-fn print_usage() {
-    println!(
-        "myctl - Cloud Resource Management CLI
-
-Usage: myctl [OPTIONS] <COMMAND>
-
-Options:
-  -v, --verbose           Enable verbose logging
-  --config <PATH>         Path to config file
-
-Commands:
-  Database:
-    db create <name>      Create a new database
-    db list               List all databases
-    db delete <name>      Delete a database
-
-  Server:
-    server start <name>   Start servers
-    server stop <name>    Stop servers
-    server list           List all servers
-
-  Deploy:
-    deploy app <name>     Deploy an application
-    deploy rollback       Rollback a deployment
-
-  Network:
-    network create        Create a network
-    network list          List networks
-
-  Storage:
-    storage upload        Upload to storage
-    storage list          List storage buckets
-
-  Config:
-    config show           Show configuration
-    config set            Set configuration
-
-  Other:
-    version               Show version
-
-Run 'myctl <command> --help' for more information on a command."
-    );
-}
 
 fn format_error(e: &sen::CliError) -> String {
     match e {
