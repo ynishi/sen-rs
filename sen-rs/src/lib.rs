@@ -63,6 +63,7 @@ use std::sync::Arc;
 // Re-export macros
 pub use sen_rs_macros::SenRouter;
 pub use sen_rs_macros::sen;
+pub use sen_rs_macros::handler;
 
 // Optional modules
 pub mod build_info;
@@ -417,6 +418,24 @@ pub struct RouterMetadata {
     pub about: Option<&'static str>,
 }
 
+/// Metadata for individual command handlers.
+///
+/// This is used by the `#[sen::handler(...)]` attribute macro.
+#[derive(Debug, Clone)]
+pub struct HandlerMetadata {
+    /// Short description of what this handler does
+    pub desc: Option<&'static str>,
+}
+
+/// Metadata for a specific route in the router.
+#[derive(Debug, Clone)]
+struct RouteMetadata {
+    /// Handler-level metadata (from #[sen::handler])
+    handler_meta: Option<HandlerMetadata>,
+    /// Route description (can be set via .describe())
+    description: Option<String>,
+}
+
 /// Handler trait - allows functions with various signatures to be used as handlers.
 ///
 /// This trait is automatically implemented for async functions with compatible signatures.
@@ -516,6 +535,7 @@ where
 /// ```
 pub struct Router<S = ()> {
     routes: HashMap<String, Box<dyn ErasedHandler<S>>>,
+    route_metadata: HashMap<String, RouteMetadata>,
     metadata: Option<RouterMetadata>,
     _marker: PhantomData<S>,
 }
@@ -537,6 +557,7 @@ where
     pub fn new() -> Self {
         Self {
             routes: HashMap::new(),
+            route_metadata: HashMap::new(),
             metadata: None,
             _marker: PhantomData,
         }
@@ -596,7 +617,12 @@ where
                 panic!("Duplicate route: {}", nested_path);
             }
 
-            self.routes.insert(nested_path, handler);
+            self.routes.insert(nested_path.clone(), handler);
+
+            // Transfer route metadata if exists
+            if let Some(meta) = router.route_metadata.get(&path) {
+                self.route_metadata.insert(nested_path, meta.clone());
+            }
         }
 
         self
@@ -642,6 +668,7 @@ where
 
         Router {
             routes,
+            route_metadata: self.route_metadata,
             metadata: self.metadata,
             _marker: PhantomData,
         }

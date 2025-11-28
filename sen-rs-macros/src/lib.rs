@@ -251,3 +251,21 @@ pub fn sen(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     TokenStream::from(expanded)
 }
+
+/// Attribute macro for handler functions to attach metadata.
+///
+/// For now, this is a placeholder that just passes through the function.
+/// Full implementation will be done in a future iteration.
+///
+/// # Usage
+///
+/// ```ignore
+/// #[sen::handler(desc = "Create a new database")]
+/// pub async fn create(...) -> CliResult<String> { ... }
+/// ```
+#[proc_macro_attribute]
+pub fn handler(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    // For now, just return the function as-is
+    // In the future, we'll generate wrapper code
+    item
+}
