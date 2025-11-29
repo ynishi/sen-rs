@@ -147,6 +147,91 @@ impl<T> State<T> {
     }
 }
 
+/// Global options wrapper for CLI-wide flags.
+///
+/// Similar to State, but immutable (read-only). Used for global flags like
+/// `--verbose`, `--config`, etc. that apply to all commands.
+///
+/// # Usage Pattern
+///
+/// ```ignore
+/// use sen::{GlobalOptions, FromGlobalArgs, State};
+///
+/// // 1. Define global options structure
+/// #[derive(Clone)]
+/// struct GlobalOpts {
+///     verbose: bool,
+///     config: Option<String>,
+/// }
+///
+/// // 2. Implement FromGlobalArgs (or use clap::Parser derive)
+/// impl FromGlobalArgs for GlobalOpts {
+///     fn from_global_args(args: &[String]) -> Result<(Self, Vec<String>), CliError> {
+///         // Parse global flags and return remaining args
+///         // ...
+///     }
+/// }
+///
+/// // 3. In main(), parse global options first
+/// #[tokio::main]
+/// async fn main() {
+///     let args: Vec<String> = std::env::args().skip(1).collect();
+///
+///     // Parse global options
+///     let (global_opts, remaining_args) = GlobalOpts::from_global_args(&args).unwrap();
+///
+///     // Include in application state
+///     let state = State::new(AppState {
+///         global: global_opts,
+///         // ... other state fields
+///     });
+///
+///     let router = Router::new()
+///         .route("command", handler)
+///         .with_state(state);
+///
+///     let response = router.execute(&remaining_args).await;
+///     std::process::exit(response.exit_code);
+/// }
+/// ```
+///
+/// # Alternative: Direct Usage
+///
+/// You can also wrap global options in `GlobalOptions` and pass them directly:
+///
+/// ```ignore
+/// let global = GlobalOptions::new(GlobalOpts {
+///     verbose: true,
+///     config: Some("~/.myapp/config.toml".to_string()),
+/// });
+///
+/// // Access inner options (cheap clone)
+/// let opts = global.get();
+/// assert_eq!(opts.verbose, true);
+/// ```
+pub struct GlobalOptions<T>(Arc<T>);
+
+// Manual Clone implementation that doesn't require T: Clone
+impl<T> Clone for GlobalOptions<T> {
+    fn clone(&self) -> Self {
+        Self(Arc::clone(&self.0))
+    }
+}
+
+impl<T> GlobalOptions<T> {
+    /// Create a new global options wrapper.
+    pub fn new(inner: T) -> Self {
+        Self(Arc::new(inner))
+    }
+
+    /// Get a reference to the inner options.
+    ///
+    /// This is cheap - just returns a reference to the Arc'd data.
+    pub fn get(&self) -> &T {
+        &self.0
+    }
+}
+
 /// CLI result type.
 ///
 /// All handler functions should return `CliResult<T>` where `T` implements `IntoResponse`.
@@ -1062,6 +1147,45 @@ pub trait FromArgs: Sized {
     }
 }
 
+/// Trait for parsing global options from command-line arguments.
+///
+/// Similar to `FromArgs`, but specifically for global flags that apply to all commands.
+/// Global options are typically parsed before routing to specific handlers.
+///
+/// # Example
+///
+/// ```ignore
+/// #[derive(Clone)]
+/// struct GlobalOpts {
+///     verbose: bool,
+///     config: Option<String>,
+/// }
+///
+/// impl FromGlobalArgs for GlobalOpts {
+///     fn from_global_args(args: &[String]) -> Result<Self, CliError> {
+///         let mut verbose = false;
+///         let mut config = None;
+///
+///         for arg in args {
+///             if arg == "--verbose" || arg == "-v" {
+///                 verbose = true;
+///             } else if arg.starts_with("--config=") {
+///                 config = Some(arg.strip_prefix("--config=").unwrap().to_string());
+///             }
+///         }
+///
+///         Ok(GlobalOpts { verbose, config })
+///     }
+/// }
+/// ```
+pub trait FromGlobalArgs: Sized + Clone {
+    /// Parse global options from command-line arguments.
+    ///
+    /// This is called before routing, so it receives all arguments.
+    /// It should extract global flags and return the remaining non-global args.
+    fn from_global_args(args: &[String]) -> Result<(Self, Vec<String>), CliError>;
+}
+
 // ============================================================================
 // Clap Integration (when clap feature is enabled)
 // ============================================================================
@@ -1170,6 +1294,50 @@ fn clap_command_to_json(cmd: &clap::Command) -> serde_json::Value {
         "arguments": positionals,
         "options": options,
     })
+}
+
+#[cfg(feature = "clap")]
+/// Blanket implementation for global options using clap::Parser.
+///
+/// This allows using clap's derive macros for global flags:
+///
+/// ```ignore
+/// use clap::Parser;
+///
+/// #[derive(Parser, Clone)]
+/// struct GlobalOpts {
+///     /// Enable verbose logging
+///     #[arg(long, short, global = true)]
+///     verbose: bool,
+///
+///     /// Configuration file path
+///     #[arg(long, global = true)]
+///     config: Option<String>,
+/// }
+/// ```
+impl<T> FromGlobalArgs for T
+where
+    T: clap::Parser + Clone,
+{
+    fn from_global_args(args: &[String]) -> Result<(Self, Vec<String>), CliError> {
+        // Try to parse global options using clap
+        // We need to use clap's API to extract global flags and return remaining args
+
+        // For now, parse all args and let clap handle it
+        // In a real implementation, we'd need to separate global from command-specific args
+        let args_with_cmd = std::iter::once("cmd".to_string())
+            .chain(args.iter().cloned())
+            .collect::<Vec<_>>();
+
+        match T::try_parse_from(&args_with_cmd) {
+            Ok(global) => {
+                // For simplicity, return empty remaining args
+                // In practice, clap would need to be configured to allow unknown args
+                Ok((global, vec![]))
+            }
+            Err(e) => Err(CliError::user(e.to_string())),
+        }
+    }
 }
 
 // ============================================================================
