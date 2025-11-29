@@ -472,6 +472,8 @@ mod handlers {
     // Config handlers
     pub mod config {
         use super::*;
+        use std::fs;
+        use std::path::PathBuf;
 
         pub async fn show(state: State<AppState>) -> CliResult<String> {
             let app = state.read().await;
@@ -501,6 +503,141 @@ mod handlers {
             }
 
             Ok(format!("Set {} = {}", args.key, args.value))
+        }
+
+        pub async fn init(state: State<AppState>) -> CliResult<String> {
+            let app = state.read().await;
+            let config_path = PathBuf::from(&app.global.config_path);
+
+            // Create parent directory if it doesn't exist
+            if let Some(parent) = config_path.parent() {
+                fs::create_dir_all(parent)
+                    .map_err(|e| sen::CliError::system(format!("Failed to create directory: {}", e)))?;
+            }
+
+            // Check if config already exists
+            if config_path.exists() {
+                return Err(sen::CliError::user(format!(
+                    "Configuration file already exists: {}\nUse --force to overwrite",
+                    config_path.display()
+                )));
+            }
+
+            // Create default config
+            let default_config = "# myctl configuration file\napi_endpoint: https://api.example.com\ntimeout: 30\n";
+            fs::write(&config_path, default_config)
+                .map_err(|e| sen::CliError::system(format!("Failed to write config: {}", e)))?;
+
+            Ok(format!("✓ Created configuration file: {}", config_path.display()))
+        }
+
+        pub async fn path(state: State<AppState>) -> CliResult<String> {
+            let app = state.read().await;
+            Ok(app.global.config_path.clone())
+        }
+
+        pub async fn validate(state: State<AppState>) -> CliResult<String> {
+            let app = state.read().await;
+            let config_path = PathBuf::from(&app.global.config_path);
+
+            if !config_path.exists() {
+                return Err(sen::CliError::user(format!(
+                    "Configuration file not found: {}\nRun 'myctl config init' to create one",
+                    config_path.display()
+                )));
+            }
+
+            // Try to read and parse as YAML
+            let content = fs::read_to_string(&config_path)
+                .map_err(|e| sen::CliError::system(format!("Failed to read config: {}", e)))?;
+
+            serde_yaml::from_str::<serde_yaml::Value>(&content)
+                .map_err(|e| sen::CliError::user(format!("Invalid YAML syntax: {}", e)))?;
+
+            Ok(format!("✓ Configuration is valid: {}", config_path.display()))
+        }
+
+        pub async fn edit(state: State<AppState>) -> CliResult<String> {
+            let app = state.read().await;
+            let config_path = &app.global.config_path;
+
+            if !PathBuf::from(config_path).exists() {
+                return Err(sen::CliError::user(format!(
+                    "Configuration file not found: {}\nRun 'myctl config init' to create one",
+                    config_path
+                )));
+            }
+
+            let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
+
+            if app.global.verbose {
+                println!("[DEBUG] Opening {} with {}", config_path, editor);
+            }
+
+            let status = std::process::Command::new(&editor)
+                .arg(config_path)
+                .status()
+                .map_err(|e| sen::CliError::system(format!("Failed to launch editor: {}", e)))?;
+
+            if status.success() {
+                Ok(format!("✓ Edited configuration: {}", config_path))
+            } else {
+                Err(sen::CliError::user("Editor exited with error"))
+            }
+        }
+    }
+
+    // Completion handler
+    pub mod completion {
+        use super::*;
+        use clap_complete::{generate, Shell};
+        use std::io;
+
+        #[derive(Parser, Debug)]
+        pub struct CompletionArgs {
+            /// Shell type (bash, zsh, fish, powershell, elvish)
+            pub shell: String,
+        }
+
+        pub async fn generate_completion(_state: State<AppState>, Args(args): Args<CompletionArgs>) -> CliResult<String> {
+            let shell = match args.shell.to_lowercase().as_str() {
+                "bash" => Shell::Bash,
+                "zsh" => Shell::Zsh,
+                "fish" => Shell::Fish,
+                "powershell" => Shell::PowerShell,
+                "elvish" => Shell::Elvish,
+                _ => {
+                    return Err(sen::CliError::user(format!(
+                        "Unsupported shell: {}\nSupported shells: bash, zsh, fish, powershell, elvish",
+                        args.shell
+                    )));
+                }
+            };
+
+            // Create a dummy clap app for completion generation
+            let mut cmd = clap::Command::new("myctl")
+                .version("1.0.0")
+                .about("Cloud Resource Management CLI")
+                .subcommand(clap::Command::new("db")
+                    .subcommand(clap::Command::new("create"))
+                    .subcommand(clap::Command::new("list"))
+                    .subcommand(clap::Command::new("delete")))
+                .subcommand(clap::Command::new("server")
+                    .subcommand(clap::Command::new("start"))
+                    .subcommand(clap::Command::new("stop"))
+                    .subcommand(clap::Command::new("list")))
+                .subcommand(clap::Command::new("config")
+                    .subcommand(clap::Command::new("show"))
+                    .subcommand(clap::Command::new("set"))
+                    .subcommand(clap::Command::new("init"))
+                    .subcommand(clap::Command::new("path"))
+                    .subcommand(clap::Command::new("validate"))
+                    .subcommand(clap::Command::new("edit")))
+                .subcommand(clap::Command::new("completion"));
+
+            generate(shell, &mut cmd, "myctl", &mut io::stdout());
+
+            Ok(String::new()) // Completion output goes to stdout
         }
     }
 
@@ -545,7 +682,11 @@ fn build_router(state: AppState) -> Router<()> {
 
     let config_router = Router::new()
         .route("show", handlers::config::show)
-        .route("set", handlers::config::set);
+        .route("set", handlers::config::set)
+        .route("init", handlers::config::init)
+        .route("path", handlers::config::path)
+        .route("validate", handlers::config::validate)
+        .route("edit", handlers::config::edit);
 
     // Compose them with nest() - cleaner and more organized!
     Router::new()
@@ -555,6 +696,7 @@ fn build_router(state: AppState) -> Router<()> {
         .nest("network", network_router)
         .nest("storage", storage_router)
         .nest("config", config_router)
+        .route("completion", handlers::completion::generate_completion)
         .route("version", handlers::version)
         .with_state(state)
 }
