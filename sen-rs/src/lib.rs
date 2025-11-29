@@ -434,6 +434,8 @@ struct RouteMetadata {
     handler_meta: Option<HandlerMetadata>,
     /// Route description (can be set via .describe())
     description: Option<String>,
+    /// CLI argument schema (from Clap, if available)
+    args_schema: Option<serde_json::Value>,
 }
 
 /// Handler trait - allows functions with various signatures to be used as handlers.
@@ -449,6 +451,11 @@ pub trait Handler<T, S>: Clone + Send + Sync + Sized + 'static {
 
     /// Get handler metadata (optional)
     fn metadata(&self) -> Option<HandlerMetadata> {
+        None
+    }
+
+    /// Get CLI argument schema (optional)
+    fn args_schema(&self) -> Option<serde_json::Value> {
         None
     }
 }
@@ -503,6 +510,10 @@ where
     fn metadata(&self) -> Option<HandlerMetadata> {
         Some(self.metadata.clone())
     }
+
+    fn args_schema(&self) -> Option<serde_json::Value> {
+        self.handler.args_schema()
+    }
 }
 
 /// Type-erased handler for storage in Router
@@ -516,6 +527,8 @@ trait ErasedHandler<S>: Send + Sync {
     fn clone_box(&self) -> Box<dyn ErasedHandler<S>>;
 
     fn metadata(&self) -> Option<HandlerMetadata>;
+
+    fn args_schema(&self) -> Option<serde_json::Value>;
 }
 
 impl<S> Clone for Box<dyn ErasedHandler<S>> {
@@ -572,6 +585,10 @@ where
 
     fn metadata(&self) -> Option<HandlerMetadata> {
         self.handler.metadata()
+    }
+
+    fn args_schema(&self) -> Option<serde_json::Value> {
+        self.handler.args_schema()
     }
 }
 
@@ -642,17 +659,19 @@ where
             panic!("Duplicate route: {}", command_name);
         }
 
-        // Collect handler metadata if available
+        // Collect handler metadata and schema information
         let handler_meta = handler.metadata();
-        if let Some(meta) = handler_meta {
-            self.route_metadata.insert(
-                command_name.clone(),
-                RouteMetadata {
-                    handler_meta: Some(meta),
-                    description: None,
-                },
-            );
-        }
+        let args_schema = handler.args_schema();
+
+        // Store metadata
+        self.route_metadata.insert(
+            command_name.clone(),
+            RouteMetadata {
+                handler_meta,
+                description: None,
+                args_schema,
+            },
+        );
 
         self.routes
             .insert(command_name, Box::new(HandlerService::new(handler)));
@@ -790,6 +809,10 @@ where
     fn metadata(&self) -> Option<HandlerMetadata> {
         self.handler.metadata()
     }
+
+    fn args_schema(&self) -> Option<serde_json::Value> {
+        self.handler.args_schema()
+    }
 }
 
 impl Router<()> {
@@ -845,7 +868,7 @@ impl Router<()> {
     /// Generate help message based on router metadata and available commands.
     fn generate_help(&self, _args: &[String], json_output: bool) -> Response {
         if json_output {
-            self.generate_openapi_json()
+            self.generate_cli_schema_json()
         } else {
             self.generate_help_text()
         }
@@ -886,7 +909,7 @@ impl Router<()> {
 
         help.push_str("\nOptions:\n");
         help.push_str("  -h, --help            Show help\n");
-        help.push_str("  -h, --help --json     Show OpenAPI JSON spec\n");
+        help.push_str("  -h, --help --json     Show CLI schema (all commands with arguments/options)\n");
         if self.metadata.as_ref().and_then(|m| m.version).is_some() {
             help.push_str("  -V, --version         Show version\n");
         }
@@ -894,53 +917,55 @@ impl Router<()> {
         Response::text(help)
     }
 
-    /// Generate OpenAPI 3.0 JSON specification.
-    fn generate_openapi_json(&self) -> Response {
+    /// Generate CLI schema JSON specification.
+    ///
+    /// Outputs a CLI-friendly JSON format that includes all commands with their
+    /// arguments, options, and metadata in a single dump.
+    fn generate_cli_schema_json(&self) -> Response {
         use serde_json::json;
 
-        let title = self.metadata.as_ref().map(|m| m.name).unwrap_or("CLI");
-        let version = self.metadata.as_ref().and_then(|m| m.version).unwrap_or("1.0.0");
+        let name = self.metadata.as_ref().map(|m| m.name).unwrap_or("cli");
+        let version = self.metadata.as_ref().and_then(|m| m.version).unwrap_or("unknown");
         let description = self.metadata.as_ref().and_then(|m| m.about);
 
-        let mut paths = serde_json::Map::new();
+        let mut commands = serde_json::Map::new();
 
         // Collect all routes and their metadata
-        let mut commands: Vec<_> = self.routes.keys().collect();
-        commands.sort();
+        let mut command_names: Vec<_> = self.routes.keys().collect();
+        command_names.sort();
 
-        for cmd in commands {
-            let path = format!("/{}", cmd.replace(':', "/"));
-
-            // Get handler metadata if available
-            let description = self.route_metadata
+        for cmd in command_names {
+            // Get handler description
+            let desc = self.route_metadata
                 .get(cmd)
                 .and_then(|meta| meta.handler_meta.as_ref())
                 .and_then(|h| h.desc)
                 .unwrap_or("No description available");
 
-            let operation = json!({
-                "summary": description,
-                "operationId": cmd.replace(':', "_"),
-                "responses": {
-                    "200": {
-                        "description": "Successful operation"
-                    }
-                }
+            // Build usage string
+            let usage = format!("{} {}", name, cmd.replace(':', " "));
+
+            let mut command_schema = json!({
+                "description": desc,
+                "usage": usage,
             });
 
-            let mut path_item = serde_json::Map::new();
-            path_item.insert("post".to_string(), operation);
-            paths.insert(path, serde_json::Value::Object(path_item));
+            // Add argument schema if available
+            if let Some(meta) = self.route_metadata.get(cmd) {
+                if let Some(args_schema) = &meta.args_schema {
+                    command_schema["arguments"] = args_schema["arguments"].clone();
+                    command_schema["options"] = args_schema["options"].clone();
+                }
+            }
+
+            commands.insert(cmd.to_string(), command_schema);
         }
 
         let spec = json!({
-            "openapi": "3.0.0",
-            "info": {
-                "title": title,
-                "version": version,
-                "description": description.unwrap_or(""),
-            },
-            "paths": paths,
+            "name": name,
+            "version": version,
+            "description": description.unwrap_or(""),
+            "commands": commands,
         });
 
         match serde_json::to_string_pretty(&spec) {
@@ -1027,6 +1052,14 @@ pub struct Args<T>(pub T);
 pub trait FromArgs: Sized {
     /// Parse arguments into Self, or return an error.
     fn from_args(args: &[String]) -> Result<Self, CliError>;
+
+    /// Get CLI schema information for this argument type (optional).
+    ///
+    /// Returns JSON representation of the command structure, including
+    /// arguments, options, and descriptions.
+    fn cli_schema() -> Option<serde_json::Value> {
+        None
+    }
 }
 
 // ============================================================================
@@ -1081,6 +1114,62 @@ where
         T::try_parse_from(args_with_cmd)
             .map_err(|e| CliError::user(e.to_string()))
     }
+
+    fn cli_schema() -> Option<serde_json::Value> {
+        let cmd = T::command();
+        Some(clap_command_to_json(&cmd))
+    }
+}
+
+#[cfg(feature = "clap")]
+/// Convert a clap::Command to a JSON representation.
+fn clap_command_to_json(cmd: &clap::Command) -> serde_json::Value {
+    use serde_json::json;
+
+    // Extract positional arguments
+    let mut positionals = Vec::new();
+    let mut options = Vec::new();
+
+    for arg in cmd.get_arguments() {
+        if arg.is_positional() {
+            positionals.push(json!({
+                "name": arg.get_id().as_str(),
+                "type": format!("{:?}", arg.get_value_parser().type_id()),
+                "required": arg.is_required_set(),
+                "description": arg.get_help().map(|h| h.to_string()).unwrap_or_default(),
+            }));
+        } else {
+            let mut option = json!({
+                "name": format!("--{}", arg.get_id().as_str()),
+                "type": format!("{:?}", arg.get_value_parser().type_id()),
+                "required": arg.is_required_set(),
+                "description": arg.get_help().map(|h| h.to_string()).unwrap_or_default(),
+            });
+
+            // Add short flag if available
+            if let Some(short) = arg.get_short() {
+                option["short"] = json!(format!("-{}", short));
+            }
+
+            // Add default value if available
+            let defaults = arg.get_default_values();
+            if !defaults.is_empty() {
+                option["default"] = json!(defaults[0].to_string_lossy().to_string());
+            }
+
+            // Add env var if available
+            if let Some(env) = arg.get_env() {
+                option["env"] = json!(env.to_string_lossy().to_string());
+            }
+
+            options.push(option);
+        }
+    }
+
+    json!({
+        "arguments": positionals,
+        "options": options,
+    })
 }
 
 // ============================================================================
@@ -1151,6 +1240,10 @@ where
             result.into_response()
         })
     }
+
+    fn args_schema(&self) -> Option<serde_json::Value> {
+        T::cli_schema()
+    }
 }
 
 // Handler for: async fn(Args<T>) -> impl IntoResponse (no state)
@@ -1177,6 +1270,10 @@ where
             let result = self(Args(parsed_args)).await;
             result.into_response()
         })
+    }
+
+    fn args_schema(&self) -> Option<serde_json::Value> {
+        T::cli_schema()
     }
 }
 
