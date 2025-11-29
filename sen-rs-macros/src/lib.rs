@@ -1,6 +1,9 @@
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{parse_macro_input, Data, DeriveInput, Fields, ItemFn, Token, parse::{Parse, ParseStream}};
+use syn::{
+    parse::{Parse, ParseStream},
+    parse_macro_input, Data, DeriveInput, Fields, ItemFn, Token,
+};
 
 /// Derives the SenRouter trait for an enum, generating the `execute()` method.
 ///
@@ -298,8 +301,10 @@ pub fn handler(attr: TokenStream, item: TokenStream) -> TokenStream {
         Err(e) => {
             return syn::Error::new(
                 fn_name.span(),
-                format!("Failed to extract handler types: {}", e)
-            ).to_compile_error().into();
+                format!("Failed to extract handler types: {}", e),
+            )
+            .to_compile_error()
+            .into();
         }
     };
 
@@ -337,17 +342,19 @@ pub fn handler(attr: TokenStream, item: TokenStream) -> TokenStream {
 }
 
 /// Extract State<S> and Args<T> types from handler function signature
-fn extract_handler_types(inputs: &syn::punctuated::Punctuated<syn::FnArg, syn::Token![,]>) -> Result<(syn::Type, syn::Type), String> {
+fn extract_handler_types(
+    inputs: &syn::punctuated::Punctuated<syn::FnArg, syn::Token![,]>,
+) -> Result<(syn::Type, syn::Type), String> {
     let mut iter = inputs.iter();
 
     // First parameter should be State<S>
-    let state_arg = iter.next()
+    let state_arg = iter
+        .next()
         .ok_or("Handler must have at least one parameter")?;
     let state_type = extract_type_from_state(state_arg)?;
 
     // Second parameter should be Args<T>
-    let args_arg = iter.next()
-        .ok_or("Handler must have Args parameter")?;
+    let args_arg = iter.next().ok_or("Handler must have Args parameter")?;
     let args_type = extract_type_from_args(args_arg)?;
 
     Ok((state_type, args_type))
@@ -356,9 +363,7 @@ fn extract_handler_types(inputs: &syn::punctuated::Punctuated<syn::FnArg, syn::T
 /// Extract S from State<S> parameter
 fn extract_type_from_state(arg: &syn::FnArg) -> Result<syn::Type, String> {
     match arg {
-        syn::FnArg::Typed(pat_type) => {
-            extract_generic_type(&pat_type.ty, "State")
-        }
+        syn::FnArg::Typed(pat_type) => extract_generic_type(&pat_type.ty, "State"),
         _ => Err("Expected typed parameter".to_string()),
     }
 }
@@ -366,9 +371,7 @@ fn extract_type_from_state(arg: &syn::FnArg) -> Result<syn::Type, String> {
 /// Extract T from Args(args): Args<T> parameter
 fn extract_type_from_args(arg: &syn::FnArg) -> Result<syn::Type, String> {
     match arg {
-        syn::FnArg::Typed(pat_type) => {
-            extract_generic_type(&pat_type.ty, "Args")
-        }
+        syn::FnArg::Typed(pat_type) => extract_generic_type(&pat_type.ty, "Args"),
         _ => Err("Expected typed parameter".to_string()),
     }
 }
@@ -376,8 +379,7 @@ fn extract_type_from_args(arg: &syn::FnArg) -> Result<syn::Type, String> {
 /// Extract the inner type T from a generic type like State<T> or Args<T>
 fn extract_generic_type(ty: &syn::Type, expected_ident: &str) -> Result<syn::Type, String> {
     if let syn::Type::Path(type_path) = ty {
-        let last_segment = type_path.path.segments.last()
-            .ok_or("Empty type path")?;
+        let last_segment = type_path.path.segments.last().ok_or("Empty type path")?;
 
         if last_segment.ident != expected_ident {
             return Err(format!("Expected {} type", expected_ident));

@@ -67,7 +67,7 @@ pub struct TestArgs {
 
 impl FromArgs for TestArgs {
     fn from_args(args: &[String]) -> Result<Self, CliError> {
-        let filter = args.get(0).cloned();
+        let filter = args.first().cloned();
         Ok(TestArgs { filter })
     }
 }
@@ -160,9 +160,9 @@ async fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
 
     // Handle version command
-    if args.get(0).map(|s| s.as_str()) == Some("--version")
-        || args.get(0).map(|s| s.as_str()) == Some("-V")
-        || args.get(0).map(|s| s.as_str()) == Some("version")
+    if args.first().map(|s| s.as_str()) == Some("--version")
+        || args.first().map(|s| s.as_str()) == Some("-V")
+        || args.first().map(|s| s.as_str()) == Some("version")
     {
         println!("{}", version_info());
         std::process::exit(0);
