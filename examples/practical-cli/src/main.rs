@@ -1,5 +1,44 @@
-use sen::{CliResult, State, Router, Args, init_subscriber};
+use sen::{CliResult, State, Router, Args, init_subscriber, FromGlobalArgs};
 use clap::Parser;
+
+// ============================================
+// Global Options (CLI-wide flags)
+// ============================================
+
+#[derive(Clone, Debug)]
+pub struct GlobalOpts {
+    pub verbose: bool,
+    pub config_path: String,
+}
+
+impl FromGlobalArgs for GlobalOpts {
+    fn from_global_args(args: &[String]) -> Result<(Self, Vec<String>), sen::CliError> {
+        let mut verbose = false;
+        let mut config_path = "~/.myctl/config.yaml".to_string();
+        let mut remaining_args = Vec::new();
+
+        let mut skip_next = false;
+        for (i, arg) in args.iter().enumerate() {
+            if skip_next {
+                skip_next = false;
+                continue;
+            }
+
+            if arg == "--verbose" || arg == "-v" {
+                verbose = true;
+            } else if arg == "--config" {
+                if let Some(path) = args.get(i + 1) {
+                    config_path = path.clone();
+                    skip_next = true;
+                }
+            } else {
+                remaining_args.push(arg.clone());
+            }
+        }
+
+        Ok((GlobalOpts { verbose, config_path }, remaining_args))
+    }
+}
 
 // ============================================
 // Application State (Global Configuration)
@@ -7,29 +46,8 @@ use clap::Parser;
 
 #[derive(Clone)]
 pub struct AppState {
-    pub config_path: String,
+    pub global: GlobalOpts,
     pub api_endpoint: String,
-    pub verbose: bool,
-}
-
-impl AppState {
-    fn load() -> CliResult<Self> {
-        // グローバルオプションをパース
-        let args: Vec<String> = std::env::args().collect();
-
-        let verbose = args.contains(&"--verbose".to_string()) || args.contains(&"-v".to_string());
-        let config_path = args.iter()
-            .position(|a| a == "--config")
-            .and_then(|i| args.get(i + 1))
-            .cloned()
-            .unwrap_or_else(|| "~/.myctl/config.yaml".to_string());
-
-        Ok(Self {
-            config_path,
-            api_endpoint: "https://api.example.com".to_string(),
-            verbose,
-        })
-    }
 }
 
 // ============================================
@@ -212,7 +230,7 @@ mod handlers {
         ) -> CliResult<String> {
             let app = state.read().await;
 
-            if app.verbose {
+            if app.global.verbose {
                 println!("[DEBUG] Creating database with args: {:?}", args);
             }
 
@@ -239,7 +257,7 @@ mod handlers {
         ) -> CliResult<String> {
             let app = state.read().await;
 
-            if app.verbose {
+            if app.global.verbose {
                 println!("[DEBUG] Listing databases with format: {}", args.format);
             }
 
@@ -266,7 +284,7 @@ mod handlers {
                 ));
             }
 
-            if app.verbose {
+            if app.global.verbose {
                 println!("[DEBUG] Deleting database: {}", args.name);
             }
 
@@ -288,7 +306,7 @@ mod handlers {
         ) -> CliResult<String> {
             let app = state.read().await;
 
-            if app.verbose {
+            if app.global.verbose {
                 println!("[DEBUG] Starting servers: {:?}", args);
             }
 
@@ -306,7 +324,7 @@ mod handlers {
         ) -> CliResult<String> {
             let app = state.read().await;
 
-            if app.verbose {
+            if app.global.verbose {
                 println!("[DEBUG] Stopping server: {}", args.name);
             }
 
@@ -322,7 +340,7 @@ mod handlers {
         ) -> CliResult<String> {
             let app = state.read().await;
 
-            if app.verbose {
+            if app.global.verbose {
                 println!("[DEBUG] Listing servers");
             }
 
@@ -347,7 +365,7 @@ mod handlers {
         ) -> CliResult<String> {
             let app = state.read().await;
 
-            if app.verbose {
+            if app.global.verbose {
                 println!("[DEBUG] Deploying app: {:?}", args);
             }
 
@@ -369,7 +387,7 @@ mod handlers {
         ) -> CliResult<String> {
             let app = state.read().await;
 
-            if app.verbose {
+            if app.global.verbose {
                 println!("[DEBUG] Rolling back app: {}", args.app_name);
             }
 
@@ -391,7 +409,7 @@ mod handlers {
         ) -> CliResult<String> {
             let app = state.read().await;
 
-            if app.verbose {
+            if app.global.verbose {
                 println!("[DEBUG] Creating network: {:?}", args);
             }
 
@@ -406,7 +424,7 @@ mod handlers {
         pub async fn list(state: State<AppState>) -> CliResult<String> {
             let app = state.read().await;
 
-            if app.verbose {
+            if app.global.verbose {
                 println!("[DEBUG] Listing networks");
             }
 
@@ -426,7 +444,7 @@ mod handlers {
         ) -> CliResult<String> {
             let app = state.read().await;
 
-            if app.verbose {
+            if app.global.verbose {
                 println!("[DEBUG] Uploading file: {:?}", args);
             }
 
@@ -441,7 +459,7 @@ mod handlers {
         pub async fn list(state: State<AppState>) -> CliResult<String> {
             let app = state.read().await;
 
-            if app.verbose {
+            if app.global.verbose {
                 println!("[DEBUG] Listing storage buckets");
             }
 
@@ -462,7 +480,7 @@ mod handlers {
                  - Config path: {}\n\
                  - API endpoint: {}\n\
                  - Verbose: {}",
-                app.config_path, app.api_endpoint, app.verbose
+                app.global.config_path, app.api_endpoint, app.global.verbose
             ))
         }
 
@@ -478,7 +496,7 @@ mod handlers {
         pub async fn set(state: State<AppState>, Args(args): Args<SetArgs>) -> CliResult<String> {
             let app = state.read().await;
 
-            if app.verbose {
+            if app.global.verbose {
                 println!("[DEBUG] Setting config: {} = {}", args.key, args.value);
             }
 
@@ -549,24 +567,27 @@ fn build_router(state: AppState) -> Router<()> {
 async fn main() {
     init_subscriber();
 
-    // Load global state
-    let app_state = match AppState::load() {
-        Ok(state) => state,
+    // Parse command line arguments
+    let args: Vec<String> = std::env::args().skip(1).collect();
+
+    // Parse global options first
+    let (global_opts, remaining_args) = match GlobalOpts::from_global_args(&args) {
+        Ok((opts, remaining)) => (opts, remaining),
         Err(e) => {
             eprintln!("{}", format_error(&e));
             std::process::exit(e.exit_code());
         }
     };
 
-    // Parse command line arguments (filter out global flags)
-    let args: Vec<String> = std::env::args()
-        .skip(1)
-        .filter(|a| !a.starts_with("--verbose") && !a.starts_with("-v") && !a.starts_with("--config"))
-        .collect();
+    // Build application state with global options
+    let app_state = AppState {
+        global: global_opts,
+        api_endpoint: "https://api.example.com".to_string(),
+    };
 
-    // Build router and execute
+    // Build router and execute with remaining args
     let router = build_router(app_state);
-    let response = router.execute(&args).await;
+    let response = router.execute(&remaining_args).await;
 
     if !response.output.is_empty() {
         println!("{}", response.output);
