@@ -205,6 +205,7 @@ mod handlers {
     pub mod db {
         use super::*;
 
+        #[sen::handler(desc = "Create a new database")]
         pub async fn create(
             state: State<AppState>,
             Args(args): Args<DbCreateArgs>,
@@ -231,6 +232,7 @@ mod handlers {
             ))
         }
 
+        #[sen::handler(desc = "List all databases")]
         pub async fn list(
             state: State<AppState>,
             Args(args): Args<DbListArgs>,
@@ -251,6 +253,7 @@ mod handlers {
             ))
         }
 
+        #[sen::handler(desc = "Delete a database")]
         pub async fn delete(
             state: State<AppState>,
             Args(args): Args<DbDeleteArgs>,
@@ -278,6 +281,7 @@ mod handlers {
     pub mod server {
         use super::*;
 
+        #[sen::handler(desc = "Start server instances")]
         pub async fn start(
             state: State<AppState>,
             Args(args): Args<ServerStartArgs>,
@@ -500,12 +504,12 @@ mod handlers {
 fn build_router(state: AppState) -> Router<()> {
     // Create sub-routers for each resource
     let db_router = Router::new()
-        .route("create", handlers::db::create)
-        .route("list", handlers::db::list)
-        .route("delete", handlers::db::delete);
+        .route("create", handlers::db::create())
+        .route("list", handlers::db::list())
+        .route("delete", handlers::db::delete());
 
     let server_router = Router::new()
-        .route("start", handlers::server::start)
+        .route("start", handlers::server::start())
         .route("stop", handlers::server::stop)
         .route("list", handlers::server::list);
 

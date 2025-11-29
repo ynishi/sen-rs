@@ -446,6 +446,63 @@ pub trait Handler<T, S>: Clone + Send + Sync + Sized + 'static {
 
     /// Call the handler with state and arguments
     fn call(self, state: State<S>, args: Vec<String>) -> Self::Future;
+
+    /// Get handler metadata (optional)
+    fn metadata(&self) -> Option<HandlerMetadata> {
+        None
+    }
+}
+
+/// Wrapper that attaches metadata to a handler.
+///
+/// This is typically created by the `#[sen::handler]` macro.
+pub struct HandlerWithMeta<H, T, S> {
+    pub handler: H,
+    pub metadata: HandlerMetadata,
+    _marker: PhantomData<fn() -> (T, S)>,
+}
+
+impl<H, T, S> Clone for HandlerWithMeta<H, T, S>
+where
+    H: Clone,
+{
+    fn clone(&self) -> Self {
+        Self {
+            handler: self.handler.clone(),
+            metadata: self.metadata.clone(),
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<H, T, S> HandlerWithMeta<H, T, S>
+where
+    H: Handler<T, S>,
+{
+    pub fn new(handler: H, metadata: HandlerMetadata) -> Self {
+        Self {
+            handler,
+            metadata,
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<H, T, S> Handler<T, S> for HandlerWithMeta<H, T, S>
+where
+    H: Handler<T, S>,
+    T: 'static,
+    S: Send + Sync + Clone + 'static,
+{
+    type Future = H::Future;
+
+    fn call(self, state: State<S>, args: Vec<String>) -> Self::Future {
+        self.handler.call(state, args)
+    }
+
+    fn metadata(&self) -> Option<HandlerMetadata> {
+        Some(self.metadata.clone())
+    }
 }
 
 /// Type-erased handler for storage in Router
@@ -457,6 +514,8 @@ trait ErasedHandler<S>: Send + Sync {
     ) -> BoxFuture<'a, Response>;
 
     fn clone_box(&self) -> Box<dyn ErasedHandler<S>>;
+
+    fn metadata(&self) -> Option<HandlerMetadata>;
 }
 
 impl<S> Clone for Box<dyn ErasedHandler<S>> {
@@ -509,6 +568,10 @@ where
 
     fn clone_box(&self) -> Box<dyn ErasedHandler<S>> {
         Box::new(self.clone())
+    }
+
+    fn metadata(&self) -> Option<HandlerMetadata> {
+        self.handler.metadata()
     }
 }
 
@@ -709,6 +772,10 @@ where
 
     fn clone_box(&self) -> Box<dyn ErasedHandler<()>> {
         Box::new(self.clone())
+    }
+
+    fn metadata(&self) -> Option<HandlerMetadata> {
+        self.handler.metadata()
     }
 }
 

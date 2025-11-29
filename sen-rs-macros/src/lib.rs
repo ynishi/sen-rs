@@ -147,6 +147,7 @@ struct SenAttrs {
     name: Option<String>,
     version: Option<String>,
     about: Option<String>,
+    desc: Option<String>,
 }
 
 impl Parse for SenAttrs {
@@ -154,6 +155,7 @@ impl Parse for SenAttrs {
         let mut name = None;
         let mut version = None;
         let mut about = None;
+        let mut desc = None;
 
         while !input.is_empty() {
             let ident: syn::Ident = input.parse()?;
@@ -164,6 +166,7 @@ impl Parse for SenAttrs {
                 "name" => name = Some(value.value()),
                 "version" => version = Some(value.value()),
                 "about" => about = Some(value.value()),
+                "desc" => desc = Some(value.value()),
                 _ => {}
             }
 
@@ -176,6 +179,7 @@ impl Parse for SenAttrs {
             name,
             version,
             about,
+            desc,
         })
     }
 }
@@ -254,18 +258,137 @@ pub fn sen(attr: TokenStream, item: TokenStream) -> TokenStream {
 
 /// Attribute macro for handler functions to attach metadata.
 ///
-/// For now, this is a placeholder that just passes through the function.
-/// Full implementation will be done in a future iteration.
+/// Transforms a handler function into a constructor that returns
+/// HandlerWithMeta.
 ///
 /// # Usage
 ///
 /// ```ignore
 /// #[sen::handler(desc = "Create a new database")]
-/// pub async fn create(...) -> CliResult<String> { ... }
+/// pub async fn create(
+///     state: State<AppState>,
+///     Args(args): Args<DbCreateArgs>
+/// ) -> CliResult<String> {
+///     // implementation
+/// }
+/// ```
+///
+/// Expands to:
+///
+/// ```ignore
+/// pub fn create() -> HandlerWithMeta<impl Handler<...>, ...> {
+///     async fn create_impl(...) -> CliResult<String> { ... }
+///     HandlerWithMeta::new(create_impl, HandlerMetadata { desc: Some("...") })
+/// }
 /// ```
 #[proc_macro_attribute]
-pub fn handler(_attr: TokenStream, item: TokenStream) -> TokenStream {
-    // For now, just return the function as-is
-    // In the future, we'll generate wrapper code
-    item
+pub fn handler(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(item as ItemFn);
+    let attrs = parse_macro_input!(attr as SenAttrs);
+
+    let fn_name = &input.sig.ident;
+    let fn_vis = &input.vis;
+    let fn_block = &input.block;
+    let fn_inputs = &input.sig.inputs;
+    let fn_output = &input.sig.output;
+
+    // Extract State<S> and Args<T> types from function signature
+    let (state_type, args_type) = match extract_handler_types(fn_inputs) {
+        Ok(types) => types,
+        Err(e) => {
+            return syn::Error::new(
+                fn_name.span(),
+                format!("Failed to extract handler types: {}", e)
+            ).to_compile_error().into();
+        }
+    };
+
+    // Create implementation function name
+    let impl_name = syn::Ident::new(&format!("{}_impl", fn_name), fn_name.span());
+
+    // Build metadata (prefer desc, fallback to about or name)
+    let desc_expr = if let Some(d) = attrs.desc.or(attrs.about.clone()).or(attrs.name.clone()) {
+        quote! { Some(#d) }
+    } else {
+        quote! { None }
+    };
+
+    // Generate code with concrete return type
+    let expanded = quote! {
+        #fn_vis fn #fn_name() -> sen::HandlerWithMeta<
+            impl sen::Handler<(sen::State<#state_type>, sen::Args<#args_type>), #state_type>,
+            (sen::State<#state_type>, sen::Args<#args_type>),
+            #state_type
+        > {
+            // Implementation function (same signature as original)
+            async fn #impl_name(#fn_inputs) #fn_output #fn_block
+
+            // Return wrapped handler with metadata
+            sen::HandlerWithMeta::new(
+                #impl_name,
+                sen::HandlerMetadata {
+                    desc: #desc_expr,
+                }
+            )
+        }
+    };
+
+    TokenStream::from(expanded)
+}
+
+/// Extract State<S> and Args<T> types from handler function signature
+fn extract_handler_types(inputs: &syn::punctuated::Punctuated<syn::FnArg, syn::Token![,]>) -> Result<(syn::Type, syn::Type), String> {
+    let mut iter = inputs.iter();
+
+    // First parameter should be State<S>
+    let state_arg = iter.next()
+        .ok_or("Handler must have at least one parameter")?;
+    let state_type = extract_type_from_state(state_arg)?;
+
+    // Second parameter should be Args<T>
+    let args_arg = iter.next()
+        .ok_or("Handler must have Args parameter")?;
+    let args_type = extract_type_from_args(args_arg)?;
+
+    Ok((state_type, args_type))
+}
+
+/// Extract S from State<S> parameter
+fn extract_type_from_state(arg: &syn::FnArg) -> Result<syn::Type, String> {
+    match arg {
+        syn::FnArg::Typed(pat_type) => {
+            extract_generic_type(&pat_type.ty, "State")
+        }
+        _ => Err("Expected typed parameter".to_string()),
+    }
+}
+
+/// Extract T from Args(args): Args<T> parameter
+fn extract_type_from_args(arg: &syn::FnArg) -> Result<syn::Type, String> {
+    match arg {
+        syn::FnArg::Typed(pat_type) => {
+            extract_generic_type(&pat_type.ty, "Args")
+        }
+        _ => Err("Expected typed parameter".to_string()),
+    }
+}
+
+/// Extract the inner type T from a generic type like State<T> or Args<T>
+fn extract_generic_type(ty: &syn::Type, expected_ident: &str) -> Result<syn::Type, String> {
+    if let syn::Type::Path(type_path) = ty {
+        let last_segment = type_path.path.segments.last()
+            .ok_or("Empty type path")?;
+
+        if last_segment.ident != expected_ident {
+            return Err(format!("Expected {} type", expected_ident));
+        }
+
+        if let syn::PathArguments::AngleBracketed(args) = &last_segment.arguments {
+            if let Some(syn::GenericArgument::Type(inner_type)) = args.args.first() {
+                return Ok(inner_type.clone());
+            }
+        }
+    }
+
+    Err(format!("Could not extract type from {}", expected_ident))
 }
