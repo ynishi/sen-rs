@@ -641,6 +641,19 @@ where
         if self.routes.contains_key(&command_name) {
             panic!("Duplicate route: {}", command_name);
         }
+
+        // Collect handler metadata if available
+        let handler_meta = handler.metadata();
+        if let Some(meta) = handler_meta {
+            self.route_metadata.insert(
+                command_name.clone(),
+                RouteMetadata {
+                    handler_meta: Some(meta),
+                    description: None,
+                },
+            );
+        }
+
         self.routes
             .insert(command_name, Box::new(HandlerService::new(handler)));
         self
@@ -795,11 +808,14 @@ impl Router<()> {
     pub async fn execute(&self, args: &[String]) -> Response {
         // Handle --help flag
         if args.contains(&"--help".to_string()) || args.contains(&"-h".to_string()) {
-            return self.generate_help(args);
+            // Check if JSON format is requested
+            let json_output = args.contains(&"--json".to_string())
+                || args.iter().any(|a| a.starts_with("--format=json"));
+            return self.generate_help(args, json_output);
         }
 
         if args.is_empty() {
-            return self.generate_help(&[]);
+            return self.generate_help(&[], false);
         }
 
         // Handle built-in version command
@@ -827,7 +843,16 @@ impl Router<()> {
     }
 
     /// Generate help message based on router metadata and available commands.
-    fn generate_help(&self, _args: &[String]) -> Response {
+    fn generate_help(&self, _args: &[String], json_output: bool) -> Response {
+        if json_output {
+            self.generate_openapi_json()
+        } else {
+            self.generate_help_text()
+        }
+    }
+
+    /// Generate text-based help message.
+    fn generate_help_text(&self) -> Response {
         let mut help = String::new();
 
         if let Some(meta) = &self.metadata {
@@ -860,12 +885,68 @@ impl Router<()> {
         }
 
         help.push_str("\nOptions:\n");
-        help.push_str("  -h, --help     Show help\n");
+        help.push_str("  -h, --help            Show help\n");
+        help.push_str("  -h, --help --json     Show OpenAPI JSON spec\n");
         if self.metadata.as_ref().and_then(|m| m.version).is_some() {
-            help.push_str("  -V, --version  Show version\n");
+            help.push_str("  -V, --version         Show version\n");
         }
 
         Response::text(help)
+    }
+
+    /// Generate OpenAPI 3.0 JSON specification.
+    fn generate_openapi_json(&self) -> Response {
+        use serde_json::json;
+
+        let title = self.metadata.as_ref().map(|m| m.name).unwrap_or("CLI");
+        let version = self.metadata.as_ref().and_then(|m| m.version).unwrap_or("1.0.0");
+        let description = self.metadata.as_ref().and_then(|m| m.about);
+
+        let mut paths = serde_json::Map::new();
+
+        // Collect all routes and their metadata
+        let mut commands: Vec<_> = self.routes.keys().collect();
+        commands.sort();
+
+        for cmd in commands {
+            let path = format!("/{}", cmd.replace(':', "/"));
+
+            // Get handler metadata if available
+            let description = self.route_metadata
+                .get(cmd)
+                .and_then(|meta| meta.handler_meta.as_ref())
+                .and_then(|h| h.desc)
+                .unwrap_or("No description available");
+
+            let operation = json!({
+                "summary": description,
+                "operationId": cmd.replace(':', "_"),
+                "responses": {
+                    "200": {
+                        "description": "Successful operation"
+                    }
+                }
+            });
+
+            let mut path_item = serde_json::Map::new();
+            path_item.insert("post".to_string(), operation);
+            paths.insert(path, serde_json::Value::Object(path_item));
+        }
+
+        let spec = json!({
+            "openapi": "3.0.0",
+            "info": {
+                "title": title,
+                "version": version,
+                "description": description.unwrap_or(""),
+            },
+            "paths": paths,
+        });
+
+        match serde_json::to_string_pretty(&spec) {
+            Ok(json) => Response::text(json),
+            Err(e) => Response::error(1, format!("Failed to generate JSON: {}", e)),
+        }
     }
 
     /// Handle version command.
