@@ -455,7 +455,11 @@ impl Response {
     /// - `sensors`: environment data (if available)
     #[cfg(feature = "sensors")]
     pub fn to_agent_json(&self) -> String {
-        let result = if self.exit_code == 0 { "success" } else { "error" };
+        let result = if self.exit_code == 0 {
+            "success"
+        } else {
+            "error"
+        };
 
         let output = match &self.output {
             Output::Silent => String::new(),
@@ -591,7 +595,7 @@ pub enum Tier {
 
 impl Tier {
     /// Parse tier from string (case-insensitive).
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "safe" => Some(Tier::Safe),
             "standard" => Some(Tier::Standard),
@@ -626,7 +630,7 @@ impl std::str::FromStr for Tier {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Self::from_str(s).ok_or_else(|| {
+        Self::parse(s).ok_or_else(|| {
             format!(
                 "Invalid tier: '{}'. Valid options: safe, standard, critical",
                 s
@@ -1196,11 +1200,9 @@ impl Router<()> {
             // Add tier if available
             if let Some(tier_str) = tier {
                 command_schema["tier"] = json!(tier_str);
-                command_schema["requires_approval"] = json!(
-                    Tier::from_str(tier_str)
-                        .map(|t| t.requires_approval())
-                        .unwrap_or(false)
-                );
+                command_schema["requires_approval"] = json!(Tier::parse(tier_str)
+                    .map(|t| t.requires_approval())
+                    .unwrap_or(false));
             }
 
             // Add tags if available
@@ -1630,12 +1632,12 @@ mod tests {
     // ========================================
 
     #[test]
-    fn test_tier_from_str() {
-        assert_eq!(Tier::from_str("safe"), Some(Tier::Safe));
-        assert_eq!(Tier::from_str("SAFE"), Some(Tier::Safe));
-        assert_eq!(Tier::from_str("standard"), Some(Tier::Standard));
-        assert_eq!(Tier::from_str("critical"), Some(Tier::Critical));
-        assert_eq!(Tier::from_str("invalid"), None);
+    fn test_tier_parse() {
+        assert_eq!(Tier::parse("safe"), Some(Tier::Safe));
+        assert_eq!(Tier::parse("SAFE"), Some(Tier::Safe));
+        assert_eq!(Tier::parse("standard"), Some(Tier::Standard));
+        assert_eq!(Tier::parse("critical"), Some(Tier::Critical));
+        assert_eq!(Tier::parse("invalid"), None);
     }
 
     #[test]

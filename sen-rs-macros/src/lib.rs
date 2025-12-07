@@ -359,7 +359,7 @@ pub fn handler(attr: TokenStream, item: TokenStream) -> TokenStream {
     // Build tier expression
     let tier_expr = if let Some(tier_str) = attrs.tier {
         quote! {
-            sen::Tier::from_str(#tier_str)
+            sen::Tier::parse(#tier_str)
         }
     } else {
         quote! { None }

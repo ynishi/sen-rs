@@ -103,7 +103,9 @@ impl SensorData {
             .ok()
             .and_then(|output| {
                 if output.status.success() {
-                    String::from_utf8(output.stdout).ok().map(|s| s.trim().to_string())
+                    String::from_utf8(output.stdout)
+                        .ok()
+                        .map(|s| s.trim().to_string())
                 } else {
                     None
                 }
@@ -143,7 +145,7 @@ impl SensorData {
                 content
                     .lines()
                     .find(|line| line.contains("docker"))
-                    .and_then(|line| line.split('/').last())
+                    .and_then(|line| line.split('/').next_back())
                     .map(|id| id.to_string())
             });
 
@@ -208,7 +210,7 @@ mod tests {
         assert!(!data.timestamp.is_empty());
 
         // CWD should be a valid path
-        assert!(data.cwd.exists() || data.cwd == PathBuf::from("."));
+        assert!(data.cwd.exists() || data.cwd == std::path::Path::new("."));
 
         // OS/arch should follow pattern "os-arch"
         assert!(data.os_arch.contains('-'));
@@ -235,6 +237,6 @@ mod tests {
     #[test]
     fn test_cwd_exists() {
         let cwd = SensorData::collect_cwd();
-        assert!(cwd.exists() || cwd == PathBuf::from("."));
+        assert!(cwd.exists() || cwd == std::path::Path::new("."));
     }
 }
