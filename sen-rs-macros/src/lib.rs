@@ -151,6 +151,7 @@ struct SenAttrs {
     version: Option<String>,
     about: Option<String>,
     desc: Option<String>,
+    tier: Option<String>,
 }
 
 impl Parse for SenAttrs {
@@ -159,6 +160,7 @@ impl Parse for SenAttrs {
         let mut version = None;
         let mut about = None;
         let mut desc = None;
+        let mut tier = None;
 
         while !input.is_empty() {
             let ident: syn::Ident = input.parse()?;
@@ -170,6 +172,7 @@ impl Parse for SenAttrs {
                 "version" => version = Some(value.value()),
                 "about" => about = Some(value.value()),
                 "desc" => desc = Some(value.value()),
+                "tier" => tier = Some(value.value()),
                 _ => {}
             }
 
@@ -183,6 +186,7 @@ impl Parse for SenAttrs {
             version,
             about,
             desc,
+            tier,
         })
     }
 }
@@ -318,6 +322,15 @@ pub fn handler(attr: TokenStream, item: TokenStream) -> TokenStream {
         quote! { None }
     };
 
+    // Build tier expression
+    let tier_expr = if let Some(tier_str) = attrs.tier {
+        quote! {
+            sen::Tier::from_str(#tier_str)
+        }
+    } else {
+        quote! { None }
+    };
+
     // Generate code with concrete return type
     let expanded = quote! {
         #fn_vis fn #fn_name() -> sen::HandlerWithMeta<
@@ -333,6 +346,7 @@ pub fn handler(attr: TokenStream, item: TokenStream) -> TokenStream {
                 #impl_name,
                 sen::HandlerMetadata {
                     desc: #desc_expr,
+                    tier: #tier_expr,
                 }
             )
         }

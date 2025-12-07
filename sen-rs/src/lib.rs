@@ -489,6 +489,75 @@ use std::pin::Pin;
 /// Boxed future for type erasure
 type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
+/// Safety tier for CLI commands.
+///
+/// Determines the risk level of a command and whether it requires
+/// human approval when executed by AI agents.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "clap", derive(clap::ValueEnum))]
+pub enum Tier {
+    /// Safe operations (read-only, information gathering).
+    /// Examples: status, list, version, help
+    /// Agent permission: Always allow
+    Safe,
+
+    /// Standard operations (idempotent or reversible).
+    /// Examples: fmt, build, test, lint
+    /// Agent permission: Auto-approve
+    Standard,
+
+    /// Critical operations (destructive, deployment, authentication).
+    /// Examples: deploy, publish, delete, drop-database
+    /// Agent permission: Require human confirmation
+    Critical,
+}
+
+impl Tier {
+    /// Parse tier from string (case-insensitive).
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s.to_lowercase().as_str() {
+            "safe" => Some(Tier::Safe),
+            "standard" => Some(Tier::Standard),
+            "critical" => Some(Tier::Critical),
+            _ => None,
+        }
+    }
+
+    /// Convert tier to static string.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Tier::Safe => "safe",
+            Tier::Standard => "standard",
+            Tier::Critical => "critical",
+        }
+    }
+
+    /// Check if this tier requires human approval for AI agents.
+    pub fn requires_approval(&self) -> bool {
+        matches!(self, Tier::Critical)
+    }
+}
+
+impl std::fmt::Display for Tier {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+#[cfg(feature = "clap")]
+impl std::str::FromStr for Tier {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::from_str(s).ok_or_else(|| {
+            format!(
+                "Invalid tier: '{}'. Valid options: safe, standard, critical",
+                s
+            )
+        })
+    }
+}
+
 /// Metadata for CLI application and commands.
 ///
 /// This is used by the `#[sen(...)]` attribute macro to provide
@@ -510,6 +579,8 @@ pub struct RouterMetadata {
 pub struct HandlerMetadata {
     /// Short description of what this handler does
     pub desc: Option<&'static str>,
+    /// Safety tier for this command
+    pub tier: Option<Tier>,
 }
 
 /// Metadata for a specific route in the router.
@@ -1018,13 +1089,19 @@ impl Router<()> {
         command_names.sort();
 
         for cmd in command_names {
-            // Get handler description
-            let desc = self
+            // Get handler metadata
+            let handler_meta = self
                 .route_metadata
                 .get(cmd)
-                .and_then(|meta| meta.handler_meta.as_ref())
+                .and_then(|meta| meta.handler_meta.as_ref());
+
+            // Get handler description
+            let desc = handler_meta
                 .and_then(|h| h.desc)
                 .unwrap_or("No description available");
+
+            // Get tier information
+            let tier = handler_meta.and_then(|h| h.tier).map(|t| t.as_str());
 
             // Build usage string
             let usage = format!("{} {}", name, cmd.replace(':', " "));
@@ -1033,6 +1110,16 @@ impl Router<()> {
                 "description": desc,
                 "usage": usage,
             });
+
+            // Add tier if available
+            if let Some(tier_str) = tier {
+                command_schema["tier"] = json!(tier_str);
+                command_schema["requires_approval"] = json!(
+                    Tier::from_str(tier_str)
+                        .map(|t| t.requires_approval())
+                        .unwrap_or(false)
+                );
+            }
 
             // Add argument schema if available
             if let Some(meta) = self.route_metadata.get(cmd) {
@@ -1450,6 +1537,44 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ========================================
+    // Tier Tests
+    // ========================================
+
+    #[test]
+    fn test_tier_from_str() {
+        assert_eq!(Tier::from_str("safe"), Some(Tier::Safe));
+        assert_eq!(Tier::from_str("SAFE"), Some(Tier::Safe));
+        assert_eq!(Tier::from_str("standard"), Some(Tier::Standard));
+        assert_eq!(Tier::from_str("critical"), Some(Tier::Critical));
+        assert_eq!(Tier::from_str("invalid"), None);
+    }
+
+    #[test]
+    fn test_tier_as_str() {
+        assert_eq!(Tier::Safe.as_str(), "safe");
+        assert_eq!(Tier::Standard.as_str(), "standard");
+        assert_eq!(Tier::Critical.as_str(), "critical");
+    }
+
+    #[test]
+    fn test_tier_requires_approval() {
+        assert!(!Tier::Safe.requires_approval());
+        assert!(!Tier::Standard.requires_approval());
+        assert!(Tier::Critical.requires_approval());
+    }
+
+    #[test]
+    fn test_tier_display() {
+        assert_eq!(format!("{}", Tier::Safe), "safe");
+        assert_eq!(format!("{}", Tier::Standard), "standard");
+        assert_eq!(format!("{}", Tier::Critical), "critical");
+    }
+
+    // ========================================
+    // State Tests
+    // ========================================
 
     #[tokio::test]
     async fn test_state_creation_and_access() {

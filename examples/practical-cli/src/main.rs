@@ -223,7 +223,7 @@ mod handlers {
     pub mod db {
         use super::*;
 
-        #[sen::handler(desc = "Create a new database")]
+        #[sen::handler(desc = "Create a new database", tier = "standard")]
         pub async fn create(
             state: State<AppState>,
             Args(args): Args<DbCreateArgs>,
@@ -250,7 +250,7 @@ mod handlers {
             ))
         }
 
-        #[sen::handler(desc = "List all databases")]
+        #[sen::handler(desc = "List all databases", tier = "safe")]
         pub async fn list(
             state: State<AppState>,
             Args(args): Args<DbListArgs>,
@@ -271,7 +271,7 @@ mod handlers {
             ))
         }
 
-        #[sen::handler(desc = "Delete a database")]
+        #[sen::handler(desc = "Delete a database", tier = "critical")]
         pub async fn delete(
             state: State<AppState>,
             Args(args): Args<DbDeleteArgs>,
@@ -299,7 +299,7 @@ mod handlers {
     pub mod server {
         use super::*;
 
-        #[sen::handler(desc = "Start server instances")]
+        #[sen::handler(desc = "Start server instances", tier = "standard")]
         pub async fn start(
             state: State<AppState>,
             Args(args): Args<ServerStartArgs>,
@@ -641,7 +641,7 @@ mod handlers {
         }
     }
 
-    // Version handler
+    // Version handler (no Args, so we don't use #[sen::handler] macro)
     pub async fn version(_state: State<AppState>) -> CliResult<String> {
         Ok("myctl v1.0.0\nCopyright (c) 2025".to_string())
     }
