@@ -9,12 +9,14 @@ use clap::Parser;
 pub struct GlobalOpts {
     pub verbose: bool,
     pub config_path: String,
+    pub agent_mode: bool,
 }
 
 impl FromGlobalArgs for GlobalOpts {
     fn from_global_args(args: &[String]) -> Result<(Self, Vec<String>), sen::CliError> {
         let mut verbose = false;
         let mut config_path = "~/.myctl/config.yaml".to_string();
+        let mut agent_mode = false;
         let mut remaining_args = Vec::new();
 
         let mut skip_next = false;
@@ -26,6 +28,8 @@ impl FromGlobalArgs for GlobalOpts {
 
             if arg == "--verbose" || arg == "-v" {
                 verbose = true;
+            } else if arg == "--agent-mode" {
+                agent_mode = true;
             } else if arg == "--config" {
                 if let Some(path) = args.get(i + 1) {
                     config_path = path.clone();
@@ -36,7 +40,7 @@ impl FromGlobalArgs for GlobalOpts {
             }
         }
 
-        Ok((GlobalOpts { verbose, config_path }, remaining_args))
+        Ok((GlobalOpts { verbose, config_path, agent_mode }, remaining_args))
     }
 }
 
@@ -756,6 +760,9 @@ async fn main() {
         }
     };
 
+    // Save agent_mode flag before moving global_opts
+    let agent_mode = global_opts.agent_mode;
+
     // Build application state with global options
     let app_state = AppState {
         global: global_opts,
@@ -764,10 +771,27 @@ async fn main() {
 
     // Build router and execute with remaining args
     let router = build_router(app_state);
-    let response = router.execute(&remaining_args).await;
+    let mut response = router.execute(&remaining_args).await;
 
-    if !response.output.is_empty() {
-        println!("{}", response.output);
+    // If agent mode, attach environment sensors to response
+    if agent_mode {
+        let sensors = SensorData::collect();
+        response = response.with_metadata(sen::ResponseMetadata {
+            tier: None,  // TODO: Extract from route metadata
+            tags: None,  // TODO: Extract from route metadata
+            sensors: Some(sensors),
+        });
+    }
+
+    // Output based on mode
+    if agent_mode {
+        // Agent mode: output machine-readable JSON
+        println!("{}", response.to_agent_json());
+    } else {
+        // Normal mode: output human-readable text
+        if !response.output.is_empty() {
+            println!("{}", response.output);
+        }
     }
 
     std::process::exit(response.exit_code);

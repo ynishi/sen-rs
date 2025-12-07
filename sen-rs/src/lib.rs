@@ -386,6 +386,24 @@ pub struct Response {
 
     /// Output to display (text, JSON, or silent).
     pub output: Output,
+
+    /// Optional metadata for agent mode (tier, tags, sensors).
+    #[cfg(feature = "sensors")]
+    pub metadata: Option<ResponseMetadata>,
+}
+
+/// Metadata attached to Response for AI agents.
+#[cfg(feature = "sensors")]
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ResponseMetadata {
+    /// Safety tier of the executed command
+    pub tier: Option<&'static str>,
+
+    /// Tags of the executed command
+    pub tags: Option<Vec<&'static str>>,
+
+    /// Environment sensor data
+    pub sensors: Option<crate::sensors::SensorData>,
 }
 
 impl Response {
@@ -394,6 +412,8 @@ impl Response {
         Self {
             exit_code: 0,
             output: Output::Text(content.into()),
+            #[cfg(feature = "sensors")]
+            metadata: None,
         }
     }
 
@@ -402,6 +422,8 @@ impl Response {
         Self {
             exit_code: 0,
             output: Output::Silent,
+            #[cfg(feature = "sensors")]
+            metadata: None,
         }
     }
 
@@ -410,7 +432,56 @@ impl Response {
         Self {
             exit_code,
             output: Output::Text(message.into()),
+            #[cfg(feature = "sensors")]
+            metadata: None,
         }
+    }
+
+    /// Attach metadata to this response (for agent mode).
+    #[cfg(feature = "sensors")]
+    pub fn with_metadata(mut self, metadata: ResponseMetadata) -> Self {
+        self.metadata = Some(metadata);
+        self
+    }
+
+    /// Convert response to agent-friendly JSON format.
+    ///
+    /// Returns a JSON object with:
+    /// - `result`: "success" or "error"
+    /// - `exit_code`: numeric exit code
+    /// - `output`: command output
+    /// - `tier`: safety tier (if available)
+    /// - `tags`: command tags (if available)
+    /// - `sensors`: environment data (if available)
+    #[cfg(feature = "sensors")]
+    pub fn to_agent_json(&self) -> String {
+        let result = if self.exit_code == 0 { "success" } else { "error" };
+
+        let output = match &self.output {
+            Output::Silent => String::new(),
+            Output::Text(s) => s.clone(),
+            Output::Json(s) => s.clone(),
+        };
+
+        let mut json = serde_json::json!({
+            "result": result,
+            "exit_code": self.exit_code,
+            "output": output,
+        });
+
+        if let Some(ref metadata) = self.metadata {
+            if let Some(tier) = metadata.tier {
+                json["tier"] = serde_json::json!(tier);
+            }
+            if let Some(ref tags) = metadata.tags {
+                json["tags"] = serde_json::json!(tags);
+            }
+            if let Some(ref sensors) = metadata.sensors {
+                json["sensors"] = serde_json::to_value(sensors).unwrap_or(serde_json::json!(null));
+            }
+        }
+
+        serde_json::to_string_pretty(&json).unwrap_or_else(|_| "{}".to_string())
     }
 }
 
