@@ -22,6 +22,9 @@ help:
 	@echo "  make release-patch  - Release patch version (same as release)"
 	@echo "  make release-minor  - Release minor version (0.x.y -> 0.x+1.0)"
 	@echo "  make publish        - Publish to crates.io (macros first, then core)"
+	@echo ""
+	@echo "  Tip: Set RELEASE_CONFIRM=yes to skip confirmation prompt"
+	@echo "  Example: RELEASE_CONFIRM=yes make release-minor"
 
 check:
 	@echo "🔍 Checking all crates..."
@@ -88,7 +91,9 @@ release-patch: preflight
 	@echo "  - Create git commit and tag"
 	@echo "  - (Publish step is manual, see make publish)"
 	@echo ""
-	@read -p "Continue? [y/N] " confirm && [ "$$confirm" = "y" ] || exit 1
+	@if [ "$$RELEASE_CONFIRM" != "yes" ]; then \
+		read -p "Continue? [y/N] " confirm && [ "$$confirm" = "y" ] || exit 1; \
+	fi
 	cargo release patch --execute --no-confirm --no-publish
 
 release-minor: preflight
@@ -99,7 +104,9 @@ release-minor: preflight
 	@echo "  - Create git commit and tag"
 	@echo "  - (Publish step is manual, see make publish)"
 	@echo ""
-	@read -p "Continue? [y/N] " confirm && [ "$$confirm" = "y" ] || exit 1
+	@if [ "$$RELEASE_CONFIRM" != "yes" ]; then \
+		read -p "Continue? [y/N] " confirm && [ "$$confirm" = "y" ] || exit 1; \
+	fi
 	cargo release minor --execute --no-confirm --no-publish
 
 release: release-patch
