@@ -587,6 +587,8 @@ pub struct HandlerMetadata {
     pub desc: Option<&'static str>,
     /// Safety tier for this command
     pub tier: Option<Tier>,
+    /// Tags for command categorization and discovery
+    pub tags: Option<Vec<&'static str>>,
 }
 
 /// Metadata for a specific route in the router.
@@ -1109,6 +1111,9 @@ impl Router<()> {
             // Get tier information
             let tier = handler_meta.and_then(|h| h.tier).map(|t| t.as_str());
 
+            // Get tags
+            let tags = handler_meta.and_then(|h| h.tags.as_ref());
+
             // Build usage string
             let usage = format!("{} {}", name, cmd.replace(':', " "));
 
@@ -1125,6 +1130,11 @@ impl Router<()> {
                         .map(|t| t.requires_approval())
                         .unwrap_or(false)
                 );
+            }
+
+            // Add tags if available
+            if let Some(tag_list) = tags {
+                command_schema["tags"] = json!(tag_list);
             }
 
             // Add argument schema if available

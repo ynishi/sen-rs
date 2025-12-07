@@ -152,6 +152,7 @@ struct SenAttrs {
     about: Option<String>,
     desc: Option<String>,
     tier: Option<String>,
+    tags: Option<Vec<String>>,
 }
 
 impl Parse for SenAttrs {
@@ -161,19 +162,51 @@ impl Parse for SenAttrs {
         let mut about = None;
         let mut desc = None;
         let mut tier = None;
+        let mut tags = None;
 
         while !input.is_empty() {
             let ident: syn::Ident = input.parse()?;
             input.parse::<Token![=]>()?;
-            let value: syn::LitStr = input.parse()?;
 
             match ident.to_string().as_str() {
-                "name" => name = Some(value.value()),
-                "version" => version = Some(value.value()),
-                "about" => about = Some(value.value()),
-                "desc" => desc = Some(value.value()),
-                "tier" => tier = Some(value.value()),
-                _ => {}
+                "name" => {
+                    let value: syn::LitStr = input.parse()?;
+                    name = Some(value.value());
+                }
+                "version" => {
+                    let value: syn::LitStr = input.parse()?;
+                    version = Some(value.value());
+                }
+                "about" => {
+                    let value: syn::LitStr = input.parse()?;
+                    about = Some(value.value());
+                }
+                "desc" => {
+                    let value: syn::LitStr = input.parse()?;
+                    desc = Some(value.value());
+                }
+                "tier" => {
+                    let value: syn::LitStr = input.parse()?;
+                    tier = Some(value.value());
+                }
+                "tags" => {
+                    // Parse array of strings: ["tag1", "tag2", "tag3"]
+                    let content;
+                    syn::bracketed!(content in input);
+                    let mut tag_list = Vec::new();
+                    while !content.is_empty() {
+                        let tag: syn::LitStr = content.parse()?;
+                        tag_list.push(tag.value());
+                        if !content.is_empty() {
+                            content.parse::<Token![,]>()?;
+                        }
+                    }
+                    tags = Some(tag_list);
+                }
+                _ => {
+                    // Skip unknown attributes
+                    let _: syn::LitStr = input.parse()?;
+                }
             }
 
             if !input.is_empty() {
@@ -187,6 +220,7 @@ impl Parse for SenAttrs {
             about,
             desc,
             tier,
+            tags,
         })
     }
 }
@@ -331,6 +365,16 @@ pub fn handler(attr: TokenStream, item: TokenStream) -> TokenStream {
         quote! { None }
     };
 
+    // Build tags expression
+    let tags_expr = if let Some(tag_list) = attrs.tags {
+        let tags: Vec<_> = tag_list.iter().collect();
+        quote! {
+            Some(vec![#(#tags),*])
+        }
+    } else {
+        quote! { None }
+    };
+
     // Generate code with concrete return type
     let expanded = quote! {
         #fn_vis fn #fn_name() -> sen::HandlerWithMeta<
@@ -347,6 +391,7 @@ pub fn handler(attr: TokenStream, item: TokenStream) -> TokenStream {
                 sen::HandlerMetadata {
                     desc: #desc_expr,
                     tier: #tier_expr,
+                    tags: #tags_expr,
                 }
             )
         }

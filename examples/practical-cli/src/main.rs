@@ -223,7 +223,11 @@ mod handlers {
     pub mod db {
         use super::*;
 
-        #[sen::handler(desc = "Create a new database", tier = "standard")]
+        #[sen::handler(
+            desc = "Create a new database",
+            tier = "standard",
+            tags = ["database", "infrastructure", "create"]
+        )]
         pub async fn create(
             state: State<AppState>,
             Args(args): Args<DbCreateArgs>,
@@ -250,7 +254,11 @@ mod handlers {
             ))
         }
 
-        #[sen::handler(desc = "List all databases", tier = "safe")]
+        #[sen::handler(
+            desc = "List all databases",
+            tier = "safe",
+            tags = ["database", "infrastructure", "read-only"]
+        )]
         pub async fn list(
             state: State<AppState>,
             Args(args): Args<DbListArgs>,
@@ -271,7 +279,11 @@ mod handlers {
             ))
         }
 
-        #[sen::handler(desc = "Delete a database", tier = "critical")]
+        #[sen::handler(
+            desc = "Delete a database",
+            tier = "critical",
+            tags = ["database", "infrastructure", "destructive", "delete"]
+        )]
         pub async fn delete(
             state: State<AppState>,
             Args(args): Args<DbDeleteArgs>,
@@ -299,7 +311,11 @@ mod handlers {
     pub mod server {
         use super::*;
 
-        #[sen::handler(desc = "Start server instances", tier = "standard")]
+        #[sen::handler(
+            desc = "Start server instances",
+            tier = "standard",
+            tags = ["server", "infrastructure", "operations"]
+        )]
         pub async fn start(
             state: State<AppState>,
             Args(args): Args<ServerStartArgs>,
