@@ -69,6 +69,9 @@ pub use sen_rs_macros::SenRouter;
 pub mod build_info;
 pub mod tracing_support;
 
+#[cfg(feature = "sensors")]
+pub mod sensors;
+
 // Re-export tracing itself (required for #[instrument] macro)
 #[cfg(feature = "tracing")]
 pub use tracing_support::tracing;
@@ -82,6 +85,9 @@ pub use tracing_support::{
 
 #[cfg(feature = "build-info")]
 pub use build_info::{version_info, version_short};
+
+#[cfg(feature = "sensors")]
+pub use sensors::{GitSensor, SensorData, Sensors};
 
 // Re-export clap for convenience when using clap integration
 #[cfg(feature = "clap")]

@@ -19,15 +19,17 @@ tokio = { version = "1.42", features = ["full"] }
 clap = { version = "4", optional = true, features = ["derive", "env"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+chrono = { version = "0.4", optional = true }
 
 [build-dependencies]
 built = { version = "0.7", features = ["chrono", "git2"] }
 
 [features]
-default = ["build-info", "tracing"]
+default = ["build-info", "tracing", "sensors"]
 build-info = ["dep:built"]
 tracing = ["dep:tracing", "dep:tracing-subscriber"]
 clap = ["dep:clap"]
+sensors = ["dep:chrono"]
 
 [dev-dependencies]
 clap = { version = "4", features = ["derive", "env"] }

@@ -1,4 +1,4 @@
-use sen::{CliResult, State, Router, Args, init_subscriber, FromGlobalArgs};
+use sen::{CliResult, State, Router, Args, init_subscriber, FromGlobalArgs, SensorData};
 use clap::Parser;
 
 // ============================================
@@ -645,6 +645,24 @@ mod handlers {
     pub async fn version(_state: State<AppState>) -> CliResult<String> {
         Ok("myctl v1.0.0\nCopyright (c) 2025".to_string())
     }
+
+    // Info handler - demonstrates sensor system
+    pub async fn info(state: State<AppState>) -> CliResult<String> {
+        let app = state.read().await;
+
+        if app.global.verbose {
+            println!("[DEBUG] Collecting sensor data...");
+        }
+
+        // Collect sensor data from environment
+        let sensors = SensorData::collect();
+
+        // Serialize to JSON
+        let json = serde_json::to_string_pretty(&sensors)
+            .map_err(|e| sen::CliError::system(format!("Failed to serialize sensors: {}", e)))?;
+
+        Ok(format!("Environment Information:\n{}", json))
+    }
 }
 
 // ============================================
@@ -698,6 +716,7 @@ fn build_router(state: AppState) -> Router<()> {
         .nest("config", config_router)
         .route("completion", handlers::completion::generate_completion)
         .route("version", handlers::version)
+        .route("info", handlers::info)
         .with_state(state)
 }
 
