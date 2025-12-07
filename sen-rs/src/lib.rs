@@ -1779,6 +1779,7 @@ mod tests {
     async fn test_router_multiple_routes() {
         #[derive(Clone)]
         struct AppState {
+            #[allow(dead_code)]
             count: i32,
         }
 
@@ -1811,6 +1812,7 @@ mod tests {
     async fn test_router_with_args() {
         #[derive(Clone)]
         struct AppState {
+            #[allow(dead_code)]
             base_cmd: String,
         }
 

@@ -30,6 +30,7 @@ build-info = ["dep:built"]
 tracing = ["dep:tracing", "dep:tracing-subscriber"]
 clap = ["dep:clap"]
 sensors = ["dep:chrono"]
+unstable-clap-tests = []  # For gating WIP clap integration tests
 
 [dev-dependencies]
 clap = { version = "4", features = ["derive", "env"] }
