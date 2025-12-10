@@ -250,17 +250,19 @@ pub type CliResult<T> = Result<T, CliError>;
 /// Top-level error type for CLI operations.
 ///
 /// Distinguishes between user-fixable errors (exit code 1) and system failures (exit code 101).
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum CliError {
     /// User-fixable errors (exit code 1).
     ///
     /// These should include actionable hints for users.
-    User(UserError),
+    #[error(transparent)]
+    User(#[from] UserError),
 
     /// System-level failures (exit code 101).
     ///
     /// These indicate bugs or environmental issues that users can't fix.
-    System(SystemError),
+    #[error(transparent)]
+    System(#[from] SystemError),
 }
 
 impl CliError {
@@ -284,93 +286,43 @@ impl CliError {
 }
 
 /// User-fixable errors (exit code 1).
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum UserError {
     /// Generic user error with a message.
+    #[error("Error: {0}")]
     Generic(String),
 
     /// Invalid argument provided.
+    #[error("Error: Invalid argument '{arg}'\n\n{reason}")]
     InvalidArgument { arg: String, reason: String },
 
     /// Missing required dependency.
+    #[error("Error: Missing dependency '{tool}'\n\nHint: {install_hint}")]
     MissingDependency { tool: String, install_hint: String },
 
     /// Validation failed.
+    #[error("Error: Validation failed\n\n{}", .details.join("\n"))]
     ValidationFailed { details: Vec<String> },
 
     /// Prerequisite not met.
+    #[error("Error: Prerequisite not met: {check}\n\nHint: {fix_hint}")]
     PrerequisiteNotMet { check: String, fix_hint: String },
 }
 
-impl std::fmt::Display for UserError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            UserError::Generic(msg) => write!(f, "Error: {}", msg),
-            UserError::InvalidArgument { arg, reason } => {
-                write!(f, "Error: Invalid argument '{}'\n\n{}", arg, reason)
-            }
-            UserError::MissingDependency { tool, install_hint } => {
-                write!(
-                    f,
-                    "Error: Missing dependency '{}'\n\nHint: {}",
-                    tool, install_hint
-                )
-            }
-            UserError::ValidationFailed { details } => {
-                write!(f, "Error: Validation failed\n\n{}", details.join("\n"))
-            }
-            UserError::PrerequisiteNotMet { check, fix_hint } => {
-                write!(
-                    f,
-                    "Error: Prerequisite not met: {}\n\nHint: {}",
-                    check, fix_hint
-                )
-            }
-        }
-    }
-}
-
 /// System-level failures (exit code 101).
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum SystemError {
     /// Generic internal error.
+    #[error("Internal Error: {0}\n\nThis is likely a bug.")]
     Internal(String),
 
     /// I/O error.
-    Io(std::io::Error),
+    #[error("Internal Error: I/O operation failed\n\n{0:?}\n\nThis is likely a bug.")]
+    Io(#[from] std::io::Error),
 
     /// Configuration parsing error.
+    #[error("Internal Error: Config parse failed\n\n{0}\n\nThis is likely a bug.")]
     ConfigParse(String),
-}
-
-impl std::fmt::Display for SystemError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            SystemError::Internal(msg) => {
-                write!(f, "Internal Error: {}\n\nThis is likely a bug.", msg)
-            }
-            SystemError::Io(e) => {
-                write!(
-                    f,
-                    "Internal Error: I/O operation failed\n\n{:?}\n\nThis is likely a bug.",
-                    e
-                )
-            }
-            SystemError::ConfigParse(e) => {
-                write!(
-                    f,
-                    "Internal Error: Config parse failed\n\n{}\n\nThis is likely a bug.",
-                    e
-                )
-            }
-        }
-    }
-}
-
-impl From<std::io::Error> for CliError {
-    fn from(e: std::io::Error) -> Self {
-        CliError::System(SystemError::Io(e))
-    }
 }
 
 // ============================================================================
@@ -386,6 +338,9 @@ pub struct Response {
 
     /// Output to display (text, JSON, or silent).
     pub output: Output,
+
+    /// Whether this response should be output in agent mode (JSON).
+    pub agent_mode: bool,
 
     /// Optional metadata for agent mode (tier, tags, sensors).
     #[cfg(feature = "sensors")]
@@ -412,6 +367,7 @@ impl Response {
         Self {
             exit_code: 0,
             output: Output::Text(content.into()),
+            agent_mode: false,
             #[cfg(feature = "sensors")]
             metadata: None,
         }
@@ -422,6 +378,7 @@ impl Response {
         Self {
             exit_code: 0,
             output: Output::Silent,
+            agent_mode: false,
             #[cfg(feature = "sensors")]
             metadata: None,
         }
@@ -432,6 +389,7 @@ impl Response {
         Self {
             exit_code,
             output: Output::Text(message.into()),
+            agent_mode: false,
             #[cfg(feature = "sensors")]
             metadata: None,
         }
@@ -851,6 +809,7 @@ pub struct Router<S = ()> {
     routes: HashMap<String, Box<dyn ErasedHandler<S>>>,
     route_metadata: HashMap<String, RouteMetadata>,
     metadata: Option<RouterMetadata>,
+    agent_mode_enabled: bool,
     _marker: PhantomData<S>,
 }
 
@@ -873,6 +832,7 @@ where
             routes: HashMap::new(),
             route_metadata: HashMap::new(),
             metadata: None,
+            agent_mode_enabled: false,
             _marker: PhantomData,
         }
     }
@@ -979,6 +939,29 @@ where
         self
     }
 
+    /// Enable automatic agent mode support.
+    ///
+    /// When enabled, the router will:
+    /// - Automatically detect `--agent-mode` flag in arguments
+    /// - Strip the flag before routing to handlers
+    /// - Set `agent_mode` in the Response for automatic JSON output
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let router = Router::new()
+    ///     .route("build", handlers::build)
+    ///     .with_agent_mode()
+    ///     .with_state(state);
+    ///
+    /// // User runs: myapp --agent-mode build
+    /// // Router automatically handles the flag and outputs JSON
+    /// ```
+    pub fn with_agent_mode(mut self) -> Self {
+        self.agent_mode_enabled = true;
+        self
+    }
+
     /// Provide the application state, converting `Router<S>` to `Router<()>`.
     ///
     /// This follows Axum's pattern where the type system ensures all required
@@ -999,6 +982,7 @@ where
             routes,
             route_metadata: self.route_metadata,
             metadata: self.metadata,
+            agent_mode_enabled: self.agent_mode_enabled,
             _marker: PhantomData,
         }
     }
@@ -1046,54 +1030,123 @@ where
 }
 
 impl Router<()> {
-    /// Execute a command with the given arguments.
+    /// Execute a command using environment arguments.
+    ///
+    /// This is the most common usage - automatically reads from `std::env::args()`.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// #[tokio::main]
+    /// async fn main() {
+    ///     let router = Router::new()
+    ///         .route("build", build_handler)
+    ///         .route("test", test_handler);
+    ///
+    ///     let response = router.execute().await;
+    ///     std::process::exit(response.exit_code);
+    /// }
+    /// ```
+    pub async fn execute(&self) -> Response {
+        let args: Vec<String> = std::env::args().collect();
+        self.execute_with(&args).await
+    }
+
+    /// Execute a command with custom arguments.
+    ///
+    /// Useful for testing or when you need to provide arguments programmatically.
+    /// The first element (`args[0]`) should be the program name (like `std::env::args()`).
     ///
     /// Supports both flat and nested command structures:
-    /// - `["build"]` → matches route "build"
-    /// - `["db", "create"]` → matches route "db:create"
-    /// - `["db", "backup", "create"]` → matches route "db:backup:create"
+    /// - `["myapp", "build"]` → matches route "build"
+    /// - `["myapp", "db", "create"]` → matches route "db:create"
+    /// - `["myapp", "db", "backup", "create"]` → matches route "db:backup:create"
     ///
     /// Special handling:
     /// - `--help` or `-h` → displays help message
     /// - `version` → displays version (if metadata.version is set)
     ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// // Testing
+    /// let response = router.execute_with(&["myapp", "build", "--release"]).await;
+    /// assert_eq!(response.exit_code, 0);
+    /// ```
+    ///
     /// Returns a Response with exit code and output.
-    pub async fn execute(&self, args: &[String]) -> Response {
+    pub async fn execute_with(&self, args: &[String]) -> Response {
+        // Skip program name (args[0])
+        let command_args = if args.is_empty() { &[] } else { &args[1..] };
+
+        // Detect and strip --agent-mode flag if agent_mode is enabled
+        let (agent_mode_active, command_args) = if self.agent_mode_enabled {
+            let agent_mode = command_args.contains(&"--agent-mode".to_string());
+            let filtered: Vec<String> = command_args
+                .iter()
+                .filter(|arg| *arg != "--agent-mode")
+                .cloned()
+                .collect();
+            (agent_mode, filtered)
+        } else {
+            (false, command_args.to_vec())
+        };
+
+        let command_args_slice: &[String] = &command_args;
+
         // Handle --help flag
-        if args.contains(&"--help".to_string()) || args.contains(&"-h".to_string()) {
+        if command_args_slice.contains(&"--help".to_string())
+            || command_args_slice.contains(&"-h".to_string())
+        {
             // Check if JSON format is requested
-            let json_output = args.contains(&"--json".to_string())
-                || args.iter().any(|a| a.starts_with("--format=json"));
-            return self.generate_help(args, json_output);
+            let json_output = command_args_slice.contains(&"--json".to_string())
+                || command_args_slice
+                    .iter()
+                    .any(|a| a.starts_with("--format=json"));
+            let mut response = self.generate_help(command_args_slice, json_output);
+            response.agent_mode = agent_mode_active;
+            return response;
         }
 
-        if args.is_empty() {
-            return self.generate_help(&[], false);
+        if command_args_slice.is_empty() {
+            let mut response = self.generate_help(&[], false);
+            response.agent_mode = agent_mode_active;
+            return response;
         }
 
         // Handle built-in version command
-        if args.len() == 1 && (args[0] == "version" || args[0] == "--version" || args[0] == "-V") {
-            return self.handle_version();
+        if command_args_slice.len() == 1
+            && (command_args_slice[0] == "version"
+                || command_args_slice[0] == "--version"
+                || command_args_slice[0] == "-V")
+        {
+            let mut response = self.handle_version();
+            response.agent_mode = agent_mode_active;
+            return response;
         }
 
         // Try to match nested commands first (longest match wins)
         // e.g., ["db", "create", "--flag"] tries:
         //   1. "db:create" (found!)
         //   2. "db" (fallback)
-        let (matched_handler, remaining_args) = self.find_route(args);
+        let (matched_handler, remaining_args) = self.find_route(command_args_slice);
 
-        match matched_handler {
+        let mut response = match matched_handler {
             Some(handler) => {
                 let state = State::new(());
                 handler.call_boxed(state, remaining_args).await
             }
             None => {
-                let command = args.join(" ");
+                let command = command_args_slice.join(" ");
                 let err: CliResult<()> =
                     Err(CliError::user(format!("Unknown command: {}", command)));
                 err.into_response()
             }
-        }
+        };
+
+        // Set agent_mode flag if it was detected
+        response.agent_mode = agent_mode_active;
+        response
     }
 
     /// Generate help message based on router metadata and available commands.
@@ -1308,7 +1361,67 @@ pub struct Args<T>(pub T);
 
 /// Trait for parsing command-line arguments into a type.
 ///
-/// This is similar to Axum's `FromRequest` trait.
+/// This is similar to Axum's `FromRequest` trait and provides a lightweight
+/// way to parse per-command arguments.
+///
+/// # When to use `FromArgs`
+///
+/// Use `FromArgs` when:
+/// - ✅ You have simple per-command arguments (e.g., `--release`, `--output file.txt`)
+/// - ✅ You don't need global flags that apply to all commands
+/// - ✅ You want the framework to handle argument injection automatically
+///
+/// **Don't use `FromArgs` when:**
+/// - ❌ You need global flags (e.g., `--verbose`, `--config`) → use `FromGlobalArgs`
+/// - ❌ You need complex validation or conflicting flag logic → use `clap` directly
+/// - ❌ You're building a production CLI with many commands → see `examples/practical-cli`
+///
+/// # Example
+///
+/// ```rust
+/// use sen::{Args, FromArgs, CliError, CliResult};
+///
+/// #[derive(Debug)]
+/// struct BuildArgs {
+///     release: bool,
+///     output: Option<String>,
+/// }
+///
+/// impl FromArgs for BuildArgs {
+///     fn from_args(args: &[String]) -> Result<Self, CliError> {
+///         let mut release = false;
+///         let mut output = None;
+///
+///         let mut iter = args.iter();
+///         while let Some(arg) = iter.next() {
+///             match arg.as_str() {
+///                 "--release" => release = true,
+///                 "--output" => output = iter.next().map(|s| s.clone()),
+///                 _ => {}
+///             }
+///         }
+///
+///         Ok(BuildArgs { release, output })
+///     }
+/// }
+///
+/// // Use in handler
+/// async fn build(Args(args): Args<BuildArgs>) -> CliResult<String> {
+///     let mode = if args.release { "release" } else { "debug" };
+///     Ok(format!("Building in {} mode", mode))
+/// }
+/// ```
+///
+/// # Comparison with `FromGlobalArgs`
+///
+/// | Feature | `FromArgs` | `FromGlobalArgs` |
+/// |---------|-----------|------------------|
+/// | Scope | Per-command | All commands |
+/// | Injection | Via `Args<T>` extractor | Via `State<AppState>` |
+/// | Use case | Simple flags | Global configuration |
+/// | Example | `--release`, `--output` | `--verbose`, `--config` |
+///
+/// See README.md § "Argument Parsing: FromArgs vs Global Options" for detailed guide.
 pub trait FromArgs: Sized {
     /// Parse arguments into Self, or return an error.
     fn from_args(args: &[String]) -> Result<Self, CliError>;
@@ -1324,12 +1437,31 @@ pub trait FromArgs: Sized {
 
 /// Trait for parsing global options from command-line arguments.
 ///
-/// Similar to `FromArgs`, but specifically for global flags that apply to all commands.
-/// Global options are typically parsed before routing to specific handlers.
+/// Global options are flags that apply to **all commands** in your CLI,
+/// such as `--verbose`, `--config`, or `--output-format`.
 ///
-/// # Example
+/// # When to use `FromGlobalArgs`
+///
+/// Use `FromGlobalArgs` when:
+/// - ✅ You have flags that apply to **all** commands (e.g., `--verbose`, `--config`)
+/// - ✅ You want to avoid repeating the same flags in every handler
+/// - ✅ You're building a production CLI with multiple commands
+/// - ✅ You need integration with `clap` or other complex parsers
+///
+/// # Comparison with `FromArgs`
+///
+/// | Feature | `FromArgs` | `FromGlobalArgs` |
+/// |---------|-----------|------------------|
+/// | Scope | Per-command | All commands |
+/// | Injection | Via `Args<T>` extractor | Via `State<AppState>` |
+/// | Parsing time | During handler call | Before routing |
+/// | Use case | Command-specific flags | CLI-wide configuration |
+///
+/// # Example: Production CLI Pattern
 ///
 /// ```ignore
+/// use sen::FromGlobalArgs;
+///
 /// #[derive(Clone)]
 /// struct GlobalOpts {
 ///     verbose: bool,
@@ -1337,27 +1469,70 @@ pub trait FromArgs: Sized {
 /// }
 ///
 /// impl FromGlobalArgs for GlobalOpts {
-///     fn from_global_args(args: &[String]) -> Result<Self, CliError> {
+///     fn from_global_args(args: &[String]) -> Result<(Self, Vec<String>), CliError> {
 ///         let mut verbose = false;
 ///         let mut config = None;
+///         let mut remaining = Vec::new();
 ///
 ///         for arg in args {
-///             if arg == "--verbose" || arg == "-v" {
-///                 verbose = true;
-///             } else if arg.starts_with("--config=") {
-///                 config = Some(arg.strip_prefix("--config=").unwrap().to_string());
+///             match arg.as_str() {
+///                 "--verbose" | "-v" => verbose = true,
+///                 s if s.starts_with("--config=") => {
+///                     config = Some(s.strip_prefix("--config=").unwrap().to_string());
+///                 }
+///                 _ => remaining.push(arg.clone()),
 ///             }
 ///         }
 ///
-///         Ok(GlobalOpts { verbose, config })
+///         Ok((GlobalOpts { verbose, config }, remaining))
 ///     }
 /// }
+///
+/// #[derive(Clone)]
+/// struct AppState {
+///     global: GlobalOpts,
+///     // ... other state fields
+/// }
+///
+/// #[tokio::main]
+/// async fn main() {
+///     let args: Vec<String> = std::env::args().skip(1).collect();
+///     let (global_opts, remaining) = GlobalOpts::from_global_args(&args).unwrap();
+///
+///     let state = AppState { global: global_opts };
+///     let router = Router::new()
+///         .route("build", handlers::build)
+///         .with_state(state);
+///
+///     // Execute with remaining args (global flags already parsed)
+///     let program_name = std::env::args().next().unwrap_or_default();
+///     let mut execute_args = vec![program_name];
+///     execute_args.extend(remaining);
+///     let response = router.execute_with(&execute_args).await;
+/// }
 /// ```
+///
+/// # Real-World Pattern
+///
+/// This pattern mirrors production CLIs like `kubectl`, `docker`, `aws`:
+///
+/// ```bash
+/// kubectl --context=prod get pods          # global: --context, command: get
+/// docker --debug run nginx                 # global: --debug, command: run
+/// myctl --verbose --config=prod db create  # global: --verbose --config, command: db create
+/// ```
+///
+/// See `examples/practical-cli` for a complete implementation with nested commands.
+///
+/// See README.md § "Argument Parsing: FromArgs vs Global Options" for detailed guide.
 pub trait FromGlobalArgs: Sized + Clone {
     /// Parse global options from command-line arguments.
     ///
     /// This is called before routing, so it receives all arguments.
     /// It should extract global flags and return the remaining non-global args.
+    ///
+    /// Returns `(parsed_options, remaining_args)` where `remaining_args` should be
+    /// passed to the router for command routing.
     fn from_global_args(args: &[String]) -> Result<(Self, Vec<String>), CliError>;
 }
 
@@ -1755,7 +1930,9 @@ mod tests {
         let state = AppState { value: 42 };
         let router = Router::new().route("status", get_value).with_state(state);
 
-        let response = router.execute(&["status".to_string()]).await;
+        let response = router
+            .execute_with(&["test".to_string(), "status".to_string()])
+            .await;
         assert_eq!(response.exit_code, 0);
         assert!(matches!(response.output, Output::Text(_)));
     }
@@ -1763,14 +1940,16 @@ mod tests {
     #[tokio::test]
     async fn test_router_unknown_command() {
         let router: Router<()> = Router::new().with_state(());
-        let response = router.execute(&["unknown".to_string()]).await;
+        let response = router
+            .execute_with(&["test".to_string(), "unknown".to_string()])
+            .await;
         assert_eq!(response.exit_code, 1);
     }
 
     #[tokio::test]
     async fn test_router_no_command() {
         let router: Router<()> = Router::new().with_state(());
-        let response = router.execute(&[]).await;
+        let response = router.execute_with(&["test".to_string()]).await;
         // Empty args now show help with exit code 0 (changed from error)
         assert_eq!(response.exit_code, 0);
     }
@@ -1797,10 +1976,14 @@ mod tests {
             .route("version", version)
             .with_state(state);
 
-        let response1 = router.execute(&["status".to_string()]).await;
+        let response1 = router
+            .execute_with(&["test".to_string(), "status".to_string()])
+            .await;
         assert_eq!(response1.exit_code, 0);
 
-        let response2 = router.execute(&["version".to_string()]).await;
+        let response2 = router
+            .execute_with(&["test".to_string(), "version".to_string()])
+            .await;
         assert_eq!(response2.exit_code, 0);
     }
 
@@ -1844,7 +2027,11 @@ mod tests {
 
         // Test with --release flag
         let response1 = router
-            .execute(&["build".to_string(), "--release".to_string()])
+            .execute_with(&[
+                "test".to_string(),
+                "build".to_string(),
+                "--release".to_string(),
+            ])
             .await;
         assert_eq!(response1.exit_code, 0);
         if let Output::Text(output) = response1.output {
@@ -1852,7 +2039,9 @@ mod tests {
         }
 
         // Test without flag
-        let response2 = router.execute(&["build".to_string()]).await;
+        let response2 = router
+            .execute_with(&["test".to_string(), "build".to_string()])
+            .await;
         assert_eq!(response2.exit_code, 0);
         if let Output::Text(output) = response2.output {
             assert_eq!(output, "debug");
@@ -1880,7 +2069,7 @@ mod tests {
         let router = Router::new().route("echo", echo).with_state(());
 
         let response = router
-            .execute(&["echo".to_string(), "Hello!".to_string()])
+            .execute_with(&["test".to_string(), "echo".to_string(), "Hello!".to_string()])
             .await;
         assert_eq!(response.exit_code, 0);
         if let Output::Text(output) = response.output {
@@ -1910,7 +2099,9 @@ mod tests {
         let router = Router::new().route("strict", strict).with_state(());
 
         // Should fail with no args
-        let response = router.execute(&["strict".to_string()]).await;
+        let response = router
+            .execute_with(&["test".to_string(), "strict".to_string()])
+            .await;
         assert_eq!(response.exit_code, 1);
     }
 
@@ -1939,7 +2130,7 @@ mod tests {
 
         // Test nested command: "db create"
         let response = router
-            .execute(&["db".to_string(), "create".to_string()])
+            .execute_with(&["test".to_string(), "db".to_string(), "create".to_string()])
             .await;
         assert_eq!(response.exit_code, 0);
         if let Output::Text(output) = response.output {
@@ -1948,7 +2139,7 @@ mod tests {
 
         // Test nested command: "db list"
         let response = router
-            .execute(&["db".to_string(), "list".to_string()])
+            .execute_with(&["test".to_string(), "db".to_string(), "list".to_string()])
             .await;
         assert_eq!(response.exit_code, 0);
         if let Output::Text(output) = response.output {
@@ -1989,7 +2180,12 @@ mod tests {
 
         // Test: "db create mydb"
         let response = router
-            .execute(&["db".to_string(), "create".to_string(), "mydb".to_string()])
+            .execute_with(&[
+                "test".to_string(),
+                "db".to_string(),
+                "create".to_string(),
+                "mydb".to_string(),
+            ])
             .await;
 
         assert_eq!(response.exit_code, 0);
@@ -2025,18 +2221,24 @@ mod tests {
             .with_state(AppState);
 
         // Top-level command
-        let response = router.execute(&["status".to_string()]).await;
+        let response = router
+            .execute_with(&["test".to_string(), "status".to_string()])
+            .await;
         assert_eq!(response.exit_code, 0);
 
         // Nested command: db create
         let response = router
-            .execute(&["db".to_string(), "create".to_string()])
+            .execute_with(&["test".to_string(), "db".to_string(), "create".to_string()])
             .await;
         assert_eq!(response.exit_code, 0);
 
         // Nested command: server start
         let response = router
-            .execute(&["server".to_string(), "start".to_string()])
+            .execute_with(&[
+                "test".to_string(),
+                "server".to_string(),
+                "start".to_string(),
+            ])
             .await;
         assert_eq!(response.exit_code, 0);
     }
@@ -2055,7 +2257,7 @@ mod tests {
 
         // Unknown subcommand
         let response = router
-            .execute(&["db".to_string(), "delete".to_string()])
+            .execute_with(&["test".to_string(), "db".to_string(), "delete".to_string()])
             .await;
         assert_eq!(response.exit_code, 1);
     }
@@ -2235,5 +2437,119 @@ mod tests {
             ])
             .await;
         assert_eq!(response.exit_code, 1);
+    }
+
+    // ========================================
+    // Agent Mode Tests
+    // ========================================
+
+    #[tokio::test]
+    async fn test_router_with_agent_mode_enabled() {
+        async fn status(_state: State<()>) -> CliResult<String> {
+            Ok("Status: OK".to_string())
+        }
+
+        let router = Router::new()
+            .route("status", status)
+            .with_agent_mode()
+            .with_state(());
+
+        // Without --agent-mode flag
+        let response = router
+            .execute_with(&["test".to_string(), "status".to_string()])
+            .await;
+        assert_eq!(response.exit_code, 0);
+        assert!(!response.agent_mode);
+
+        // With --agent-mode flag
+        let response = router
+            .execute_with(&[
+                "test".to_string(),
+                "--agent-mode".to_string(),
+                "status".to_string(),
+            ])
+            .await;
+        assert_eq!(response.exit_code, 0);
+        assert!(response.agent_mode);
+    }
+
+    #[tokio::test]
+    async fn test_router_without_agent_mode_enabled() {
+        async fn status(_state: State<()>) -> CliResult<String> {
+            Ok("Status: OK".to_string())
+        }
+
+        let router = Router::new().route("status", status).with_state(());
+
+        // With --agent-mode flag but agent_mode not enabled
+        // The flag is treated as a command, resulting in "Unknown command" error
+        let response = router
+            .execute_with(&[
+                "test".to_string(),
+                "--agent-mode".to_string(),
+                "status".to_string(),
+            ])
+            .await;
+        assert_eq!(response.exit_code, 1); // Error: unknown command
+        assert!(!response.agent_mode);
+
+        // Without --agent-mode flag works fine
+        let response = router
+            .execute_with(&["test".to_string(), "status".to_string()])
+            .await;
+        assert_eq!(response.exit_code, 0);
+        assert!(!response.agent_mode);
+    }
+
+    #[tokio::test]
+    async fn test_agent_mode_flag_stripped_from_args() {
+        #[derive(Debug)]
+        struct TestArgs {
+            message: String,
+        }
+
+        impl FromArgs for TestArgs {
+            fn from_args(args: &[String]) -> Result<Self, CliError> {
+                // --agent-mode should NOT appear in args
+                for arg in args {
+                    if arg == "--agent-mode" {
+                        return Err(CliError::user(
+                            "Unexpected --agent-mode flag in handler args",
+                        ));
+                    }
+                }
+
+                let message = args.first().cloned().unwrap_or_else(|| "empty".to_string());
+                Ok(TestArgs { message })
+            }
+        }
+
+        async fn echo(Args(args): Args<TestArgs>) -> CliResult<String> {
+            Ok(args.message)
+        }
+
+        let router = Router::new()
+            .route("echo", echo)
+            .with_agent_mode()
+            .with_state(());
+
+        // --agent-mode should be stripped before passing to handler
+        let response = router
+            .execute_with(&[
+                "test".to_string(),
+                "--agent-mode".to_string(),
+                "echo".to_string(),
+                "hello".to_string(),
+            ])
+            .await;
+
+        assert_eq!(response.exit_code, 0);
+        assert!(response.agent_mode);
+        // Should receive "hello", not "--agent-mode" or error
+        if let Output::Text(output) = response.output {
+            assert_eq!(output, "hello");
+        } else {
+            panic!("Expected text output");
+        }
     }
 }

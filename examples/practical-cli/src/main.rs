@@ -5,18 +5,46 @@ use clap::Parser;
 // Global Options (CLI-wide flags)
 // ============================================
 
+/// Global options that apply to all commands.
+///
+/// # Design Decision: Why not use `FromArgs`?
+///
+/// This example intentionally uses `FromGlobalArgs` instead of `FromArgs` for several reasons:
+///
+/// 1. **Global flags**: `--verbose` and `--config` should apply to ALL commands
+///    - With `FromArgs`, each handler would need to accept these flags separately
+///    - With `FromGlobalArgs`, we parse them once and pass via State
+///
+/// 2. **Separation of concerns**:
+///    - Global flags → parsed here and stored in AppState
+///    - Per-command flags → parsed by handlers using `FromArgs` or `clap`
+///    - Agent mode → handled automatically by Router with `.with_agent_mode()`
+///
+/// 3. **Real-world pattern**: Mirrors production CLIs like `kubectl`, `docker`, `aws-cli`
+///    - `kubectl --context=prod get pods` (global: --context, command: get, args: pods)
+///    - `docker --debug run nginx` (global: --debug, command: run, args: nginx)
+///
+/// 4. **Integration with clap**: We use `clap::Command` for help generation
+///    while keeping manual parsing for flexibility
+///
+/// # When to use `FromArgs` instead?
+///
+/// Use `FromArgs` if:
+/// - You don't need global flags
+/// - You want the framework to handle everything
+/// - Your CLI is simple (single command or no shared state)
+///
+/// See README.md § "Argument Parsing: FromArgs vs Global Options" for details.
 #[derive(Clone, Debug)]
 pub struct GlobalOpts {
     pub verbose: bool,
     pub config_path: String,
-    pub agent_mode: bool,
 }
 
 impl FromGlobalArgs for GlobalOpts {
     fn from_global_args(args: &[String]) -> Result<(Self, Vec<String>), sen::CliError> {
         let mut verbose = false;
         let mut config_path = "~/.myctl/config.yaml".to_string();
-        let mut agent_mode = false;
         let mut remaining_args = Vec::new();
 
         let mut skip_next = false;
@@ -28,8 +56,6 @@ impl FromGlobalArgs for GlobalOpts {
 
             if arg == "--verbose" || arg == "-v" {
                 verbose = true;
-            } else if arg == "--agent-mode" {
-                agent_mode = true;
             } else if arg == "--config" {
                 if let Some(path) = args.get(i + 1) {
                     config_path = path.clone();
@@ -40,7 +66,7 @@ impl FromGlobalArgs for GlobalOpts {
             }
         }
 
-        Ok((GlobalOpts { verbose, config_path, agent_mode }, remaining_args))
+        Ok((GlobalOpts { verbose, config_path }, remaining_args))
     }
 }
 
@@ -689,6 +715,24 @@ mod handlers {
 // Router Setup with nest() (New!)
 // ============================================
 
+/// Build the application router with all command handlers.
+///
+/// # Architecture Notes
+///
+/// This demonstrates a production-ready CLI structure:
+///
+/// 1. **Nested routers**: Commands are organized by resource (db, server, deploy, etc.)
+/// 2. **Global state**: AppState contains global options (--verbose, --config)
+/// 3. **Agent mode**: `.with_agent_mode()` enables automatic `--agent-mode` flag support
+///
+/// # Why use Router instead of Enum-based routing?
+///
+/// - More flexible for large CLIs with many commands
+/// - Easier to split handlers into separate modules
+/// - No need to maintain a giant enum
+/// - Better for dynamic command registration
+///
+/// See README.md § "Flexible Routing - Choose Your Style" for Enum-based alternative.
 #[sen::sen(
     name = "myctl",
     version = "1.0.0",
@@ -737,6 +781,7 @@ fn build_router(state: AppState) -> Router<()> {
         .route("completion", handlers::completion::generate_completion)
         .route("version", handlers::version)
         .route("info", handlers::info)
+        .with_agent_mode()  // Enable automatic --agent-mode flag handling
         .with_state(state)
 }
 
@@ -748,7 +793,8 @@ fn build_router(state: AppState) -> Router<()> {
 async fn main() {
     init_subscriber();
 
-    // Parse command line arguments
+    // Get program name and command line arguments
+    let program_name = std::env::args().next().unwrap_or_default();
     let args: Vec<String> = std::env::args().skip(1).collect();
 
     // Parse global options first
@@ -760,9 +806,6 @@ async fn main() {
         }
     };
 
-    // Save agent_mode flag before moving global_opts
-    let agent_mode = global_opts.agent_mode;
-
     // Build application state with global options
     let app_state = AppState {
         global: global_opts,
@@ -770,11 +813,14 @@ async fn main() {
     };
 
     // Build router and execute with remaining args
+    // Note: execute_with expects args[0] to be the program name
     let router = build_router(app_state);
-    let mut response = router.execute(&remaining_args).await;
+    let mut execute_args = vec![program_name];
+    execute_args.extend_from_slice(&remaining_args);
+    let mut response = router.execute_with(&execute_args).await;
 
     // If agent mode, attach environment sensors to response
-    if agent_mode {
+    if response.agent_mode {
         let sensors = SensorData::collect();
         response = response.with_metadata(sen::ResponseMetadata {
             tier: None,  // TODO: Extract from route metadata
@@ -784,7 +830,7 @@ async fn main() {
     }
 
     // Output based on mode
-    if agent_mode {
+    if response.agent_mode {
         // Agent mode: output machine-readable JSON
         println!("{}", response.to_agent_json());
     } else {

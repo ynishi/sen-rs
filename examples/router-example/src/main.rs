@@ -1,4 +1,4 @@
-use sen::{CliResult, State, Router, Args, FromArgs, CliError, init_subscriber, version_info, info, error};
+use sen::{CliResult, State, Router, Args, FromArgs, CliError, init_subscriber, info, error};
 
 // ============================================
 // Application State
@@ -156,20 +156,8 @@ async fn main() {
         .route("test", handlers::test)
         .with_state(app_state);
 
-    // 3. Parse CLI arguments
-    let args: Vec<String> = std::env::args().skip(1).collect();
-
-    // Handle version command
-    if args.first().map(|s| s.as_str()) == Some("--version")
-        || args.first().map(|s| s.as_str()) == Some("-V")
-        || args.first().map(|s| s.as_str()) == Some("version")
-    {
-        println!("{}", version_info());
-        std::process::exit(0);
-    }
-
-    // 4. Execute command via Router
-    let response = router.execute(&args).await;
+    // 3. Execute command via Router (reads from env::args automatically)
+    let response = router.execute().await;
 
     // 5. Handle response
     if !response.output.is_empty() {

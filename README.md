@@ -70,8 +70,7 @@ async fn main() {
         .route("build", handlers::build)
         .with_state(state);
 
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    let response = router.execute(&args).await;
+    let response = router.execute().await;
 
     if !response.output.is_empty() {
         println!("{}", response.output);
@@ -246,6 +245,167 @@ pub async fn status() -> CliResult<StatusReport> {
     Ok(StatusReport { status: "OK" })
 }
 ```
+
+## 🤖 Agent Mode (Machine-Readable Output)
+
+SEN provides **automatic** AI agent integration through built-in `--agent-mode` flag support.
+
+### Automatic Agent Mode (Recommended)
+
+Simply call `.with_agent_mode()` and the framework handles everything:
+
+```rust
+use sen::Router;
+
+#[tokio::main]
+async fn main() {
+    let router = Router::new()
+        .route("build", handlers::build)
+        .with_agent_mode()  // Enable automatic --agent-mode support
+        .with_state(state);
+
+    let response = router.execute().await;
+
+    // Automatically outputs JSON if --agent-mode was passed
+    if response.agent_mode {
+        println!("{}", response.to_agent_json());
+    } else {
+        if !response.output.is_empty() {
+            println!("{}", response.output);
+        }
+    }
+
+    std::process::exit(response.exit_code);
+}
+```
+
+**User runs:**
+```bash
+myapp build              # Normal text output
+myapp --agent-mode build # JSON output
+```
+
+### How It Works
+
+1. **Router detects** `--agent-mode` flag automatically
+2. **Strips the flag** before passing args to handlers
+3. **Sets `response.agent_mode = true`** for your output logic
+4. **Zero boilerplate** - no manual arg parsing needed
+
+### Example Output
+
+```json
+{
+  "result": "success",
+  "exit_code": 0,
+  "output": "Build completed successfully",
+  "tier": "safe",
+  "tags": ["build", "production"],
+  "sensors": {
+    "timestamp": "2024-01-15T10:30:00Z",
+    "os": "macos",
+    "cwd": "/Users/user/project"
+  }
+}
+```
+
+### Advanced: Manual Agent Mode
+
+For complex scenarios with global options, you can still manually implement agent mode (see `examples/practical-cli`).
+
+### Features
+
+- **Automatic `--agent-mode` detection**: Framework handles flag parsing
+- **`to_agent_json()`**: Converts `Response` to structured JSON
+- **Environment Sensors**: Automatic collection of system metadata (requires `sensors` feature)
+- **Tier & Tags**: Safety tier and command categorization metadata
+- **Structured Errors**: Exit codes and error messages in machine-readable format
+
+## 💡 Argument Parsing: `FromArgs` vs Global Options
+
+SEN provides multiple approaches for argument parsing, each suited for different use cases.
+
+### Simple Cases: Use `FromArgs`
+
+For per-command arguments without global flags:
+
+```rust
+use sen::{Args, FromArgs, CliError};
+
+#[derive(Debug)]
+struct BuildArgs {
+    release: bool,
+}
+
+impl FromArgs for BuildArgs {
+    fn from_args(args: &[String]) -> Result<Self, CliError> {
+        Ok(BuildArgs {
+            release: args.contains(&"--release".to_string()),
+        })
+    }
+}
+
+async fn build(Args(args): Args<BuildArgs>) -> CliResult<String> {
+    let mode = if args.release { "release" } else { "debug" };
+    Ok(format!("Building in {} mode", mode))
+}
+```
+
+**Use `FromArgs` when:**
+- ✅ You have simple per-command arguments
+- ✅ No global flags needed (`--verbose`, `--config`, etc.)
+- ✅ You want the framework to handle everything
+
+### Complex Cases: Use Global Options + Manual Parsing
+
+For applications with global flags that apply to all commands:
+
+```rust
+use sen::FromGlobalArgs;
+
+#[derive(Clone)]
+pub struct GlobalOpts {
+    pub verbose: bool,
+    pub config_path: String,
+}
+
+impl FromGlobalArgs for GlobalOpts {
+    fn from_global_args(args: &[String]) -> Result<(Self, Vec<String>), CliError> {
+        let mut verbose = false;
+        let mut config_path = "~/.config/myapp".to_string();
+        let mut remaining_args = Vec::new();
+
+        for arg in args {
+            match arg.as_str() {
+                "--verbose" | "-v" => verbose = true,
+                "--config" => { /* handle next arg */ }
+                _ => remaining_args.push(arg.clone()),
+            }
+        }
+
+        Ok((GlobalOpts { verbose, config_path }, remaining_args))
+    }
+}
+```
+
+**Use Global Options when:**
+- ✅ You need flags that apply to **all** commands (`--verbose`, `--config`)
+- ✅ You want integration with `clap` or other parsers
+- ✅ You have complex validation or conflicting flag logic
+- ✅ Building a production CLI (like `practical-cli` example)
+
+### Why practical-cli Uses Global Options
+
+The `practical-cli` example intentionally uses `FromGlobalArgs` instead of `FromArgs`:
+
+1. **Global flags**: `--verbose` and `--config` apply to all commands
+2. **`clap` integration**: Uses `clap::Command` for help generation
+3. **Flexibility**: Manual parsing allows complex validation
+4. **Real-world pattern**: Mirrors production CLI tools like `kubectl`, `docker`, etc.
+
+**Key Insight:** `FromArgs` is a convenience feature, not required. For complex CLIs, manual parsing gives you full control.
+
+See `examples/practical-cli` for a complete implementation.
 
 ## 🏗️ Architecture
 
