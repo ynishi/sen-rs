@@ -1157,7 +1157,24 @@ impl Router<()> {
                     })
                     .collect();
 
-                return crate::mcp::run_mcp_server(tools);
+                // Get program name for building full command args
+                let program_name = args.get(0).cloned().unwrap_or_else(|| "program".to_string());
+
+                return crate::mcp::run_mcp_server(tools, |tool_name, tool_args| {
+                    // Build full args: ["program_name", "command", "subcommand", ...tool_args]
+                    let mut full_args = vec![program_name.clone()];
+
+                    // Split tool_name by ":" to get command path (e.g., "db:create" -> ["db", "create"])
+                    for part in tool_name.split(':') {
+                        full_args.push(part.to_string());
+                    }
+
+                    // Add tool arguments
+                    full_args.extend(tool_args);
+
+                    // Execute the command (block on async function)
+                    futures::executor::block_on(self.execute_with(&full_args))
+                });
             }
 
             // Handle --mcp-init flag

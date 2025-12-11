@@ -22,6 +22,7 @@ serde_json = "1.0"
 chrono = { version = "0.4", optional = true }
 thiserror = "2.0"
 jsonrpc-core = { version = "18.0", optional = true }
+futures = { version = "0.3", optional = true }
 
 [build-dependencies]
 built = { version = "0.7", features = ["chrono", "git2"] }
@@ -32,7 +33,7 @@ build-info = ["dep:built"]
 tracing = ["dep:tracing", "dep:tracing-subscriber"]
 clap = ["dep:clap"]
 sensors = ["dep:chrono"]
-mcp = ["dep:jsonrpc-core"]
+mcp = ["dep:jsonrpc-core", "dep:futures"]
 unstable-clap-tests = []  # For gating WIP clap integration tests
 
 [dev-dependencies]

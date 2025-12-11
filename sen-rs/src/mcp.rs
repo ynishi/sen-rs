@@ -103,6 +103,61 @@ impl Default for McpServer {
     }
 }
 
+/// Convert MCP arguments (JSON object) to CLI arguments (Vec<String>)
+///
+/// # Arguments
+///
+/// * `arguments` - MCP arguments as JSON object
+///
+/// # Returns
+///
+/// Vector of CLI arguments
+fn convert_mcp_arguments_to_cli_args(arguments: &Value) -> Vec<String> {
+    let mut args = Vec::new();
+
+    if let Some(obj) = arguments.as_object() {
+        for (key, value) in obj {
+            if key.starts_with("--") {
+                // Option argument (e.g., "--size", "50GB")
+                args.push(key.clone());
+                match value {
+                    Value::Bool(true) => {
+                        // Boolean flag, no value needed
+                    }
+                    Value::Bool(false) => {
+                        // Skip false boolean flags
+                        args.pop(); // Remove the flag we just added
+                    }
+                    Value::String(s) => {
+                        args.push(s.clone());
+                    }
+                    Value::Number(n) => {
+                        args.push(n.to_string());
+                    }
+                    _ => {
+                        args.push(value.to_string());
+                    }
+                }
+            } else {
+                // Positional argument
+                match value {
+                    Value::String(s) => {
+                        args.push(s.clone());
+                    }
+                    Value::Number(n) => {
+                        args.push(n.to_string());
+                    }
+                    _ => {
+                        args.push(value.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    args
+}
+
 /// Run MCP server mode (JSON-RPC over stdio)
 ///
 /// This function starts an MCP server that listens on stdin for JSON-RPC requests
@@ -111,11 +166,15 @@ impl Default for McpServer {
 /// # Arguments
 ///
 /// * `tools` - Vector of MCP tools with proper schemas
+/// * `execute_tool` - Callback function to execute a tool with given name and arguments
 ///
 /// # Returns
 ///
 /// A Response indicating the server has shut down (exit code 0 for clean exit)
-pub fn run_mcp_server(tools: Vec<McpTool>) -> Response {
+pub fn run_mcp_server<F>(tools: Vec<McpTool>, execute_tool: F) -> Response
+where
+    F: Fn(&str, Vec<String>) -> Response,
+{
     let mut server = McpServer::new();
 
     // Register all tools
@@ -158,6 +217,58 @@ pub fn run_mcp_server(tools: Vec<McpTool>) -> Response {
                             json!({
                                 "tools": tools_json
                             })
+                        }
+                        Some("tools/call") => {
+                            // Extract tool name and arguments from params
+                            let params = request.get("params");
+                            let tool_name = params
+                                .and_then(|p| p.get("name"))
+                                .and_then(|n| n.as_str())
+                                .unwrap_or("");
+
+                            let arguments = params
+                                .and_then(|p| p.get("arguments"))
+                                .cloned()
+                                .unwrap_or_else(|| json!({}));
+
+                            // Convert MCP arguments to CLI args
+                            let cli_args = convert_mcp_arguments_to_cli_args(&arguments);
+
+                            // Execute the tool
+                            let tool_response = execute_tool(tool_name, cli_args);
+
+                            // Convert Response to MCP result
+                            let mcp_result = match tool_response.output {
+                                Output::Text(text) => {
+                                    json!({
+                                        "content": [{
+                                            "type": "text",
+                                            "text": text
+                                        }],
+                                        "isError": tool_response.exit_code != 0
+                                    })
+                                }
+                                Output::Json(json_str) => {
+                                    json!({
+                                        "content": [{
+                                            "type": "text",
+                                            "text": json_str
+                                        }],
+                                        "isError": tool_response.exit_code != 0
+                                    })
+                                }
+                                Output::Silent => {
+                                    json!({
+                                        "content": [{
+                                            "type": "text",
+                                            "text": ""
+                                        }],
+                                        "isError": false
+                                    })
+                                }
+                            };
+
+                            mcp_result
                         }
                         _ => {
                             json!({
@@ -371,5 +482,54 @@ mod tests {
         } else {
             panic!("Expected text output");
         }
+    }
+
+    #[test]
+    fn test_convert_mcp_arguments_to_cli_args_with_string_options() {
+        let arguments = json!({
+            "name": "mydb",
+            "--size": "100GB",
+            "--engine": "postgres"
+        });
+
+        let args = super::convert_mcp_arguments_to_cli_args(&arguments);
+
+        assert!(args.contains(&"mydb".to_string()));
+        assert!(args.contains(&"--size".to_string()));
+        assert!(args.contains(&"100GB".to_string()));
+        assert!(args.contains(&"--engine".to_string()));
+        assert!(args.contains(&"postgres".to_string()));
+    }
+
+    #[test]
+    fn test_convert_mcp_arguments_to_cli_args_with_boolean_flags() {
+        let arguments = json!({
+            "--backup": true,
+            "--force": false,
+            "--verbose": true
+        });
+
+        let args = super::convert_mcp_arguments_to_cli_args(&arguments);
+
+        // true flags should be present
+        assert!(args.contains(&"--backup".to_string()));
+        assert!(args.contains(&"--verbose".to_string()));
+
+        // false flags should not be present
+        assert!(!args.contains(&"--force".to_string()));
+    }
+
+    #[test]
+    fn test_convert_mcp_arguments_to_cli_args_with_numbers() {
+        let arguments = json!({
+            "count": 42,
+            "--port": 8080
+        });
+
+        let args = super::convert_mcp_arguments_to_cli_args(&arguments);
+
+        assert!(args.contains(&"42".to_string()));
+        assert!(args.contains(&"--port".to_string()));
+        assert!(args.contains(&"8080".to_string()));
     }
 }
