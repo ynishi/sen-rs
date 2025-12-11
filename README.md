@@ -23,19 +23,24 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-sen = "0.1"
+sen = { version = "0.1", features = ["clap"] }
+clap = { version = "4", features = ["derive"] }
+tokio = { version = "1", features = ["full"] }
 ```
 
 Or use `cargo add`:
 
 ```bash
-cargo add sen
+cargo add sen --features clap
+cargo add clap --features derive
+cargo add tokio --features full
 ```
 
-### Example (Router API - Recommended)
+### Example (Router API with Clap - Recommended)
 
 ```rust
-use sen::{CliResult, State, Router};
+use sen::{Args, CliResult, Router, State};
+use clap::Parser;
 
 // 1. Define application state
 #[derive(Clone)]
@@ -43,93 +48,246 @@ pub struct AppState {
     pub config: String,
 }
 
-// 2. Implement handlers as async functions
+// 2. Define arguments with Clap derive macro
+//    These types are automatically parsed by SEN when clap feature is enabled
+#[derive(Parser, Debug)]
+struct BuildArgs {
+    /// Build in release mode
+    #[arg(long)]
+    release: bool,
+
+    /// Number of parallel jobs
+    #[arg(short, long, default_value = "4")]
+    jobs: usize,
+}
+
+// Add descriptions to handlers with #[sen::handler] macro (Router API)
+// Or use #[sen(desc = "...")] for Enum API (see below)
+
+#[derive(Parser, Debug)]
+struct DeployArgs {
+    /// Target environment (positional argument)
+    environment: String,
+
+    /// Docker image tag
+    #[arg(long, default_value = "latest")]
+    tag: String,
+}
+
+// 3. Implement handlers as async functions
+//    Handlers can accept State, Args, or both in any order
+//    Use #[sen::handler(desc = "...")] to add descriptions for help
 mod handlers {
     use super::*;
 
+    // Handler with State only (no arguments)
+    // You can also use: #[sen::handler(desc = "Show application status")]
     pub async fn status(state: State<AppState>) -> CliResult<String> {
         let app = state.read().await;
-        Ok(format!("Config: {}", app.config))
+        Ok(format!("Status: OK (config: {})", app.config))
     }
 
-    pub async fn build(state: State<AppState>) -> CliResult<()> {
-        println!("Building...");
-        Ok(())
+    // Handler with State + Args
+    // Args(args): Args<BuildArgs> - Clap automatically parses CLI arguments here!
+    #[sen::handler(desc = "Build the project")]
+    pub async fn build(
+        state: State<AppState>,
+        Args(args): Args<BuildArgs>,  // 👈 Automatic parsing via Clap!
+    ) -> CliResult<String> {
+        let app = state.read().await;
+        let mode = if args.release { "release" } else { "debug" };
+        Ok(format!("Building in {} mode with {} jobs (config: {})",
+                   mode, args.jobs, app.config))
+    }
+
+    // Order doesn't matter! Args can come before State
+    #[sen::handler(desc = "Deploy to environment")]
+    pub async fn deploy(
+        Args(args): Args<DeployArgs>,  // 👈 Clap parses from CLI automatically!
+        state: State<AppState>,
+    ) -> CliResult<String> {
+        let app = state.read().await;
+        Ok(format!("Deploying to {} with tag {} (config: {})",
+                   args.environment, args.tag, app.config))
     }
 }
 
-// 3. Wire it up with Router (< 20 lines of main.rs)
+// 4. Wire it up with Router (< 30 lines of main.rs)
 #[tokio::main]
 async fn main() {
+    // Create application state (shared across all handlers)
     let state = AppState {
         config: "production".to_string(),
     };
 
-    let router = Router::new()
-        .route("status", handlers::status)
-        .route("build", handlers::build)
-        .with_state(state);
+    // Build the router with command → handler mappings
+    // Use #[sen::sen()] macro to set CLI metadata
+    let router = build_router(state);
 
+    // Execute the command from CLI arguments
     let response = router.execute().await;
 
+    // Print output and exit with proper code
     if !response.output.is_empty() {
         println!("{}", response.output);
     }
     std::process::exit(response.exit_code);
 }
+
+// Set CLI metadata with #[sen::sen()] macro
+#[sen::sen(
+    name = "myapp",
+    version = "1.0.0",
+    about = "My awesome CLI application"
+)]
+fn build_router(state: AppState) -> Router<()> {
+    Router::new()
+        .route("status", handlers::status)   // myapp status
+        .route("build", handlers::build)     // myapp build [--release] [--jobs N]
+        .route("deploy", handlers::deploy)   // myapp deploy <env> [--tag TAG]
+        .with_state(state)                   // Inject state into all handlers
+}
 ```
 
-### Example (Enum API - Type-safe alternative)
+**Usage:**
+```bash
+myapp status                              # No arguments
+myapp build --release --jobs 8            # With arguments
+myapp deploy production --tag v1.2.3      # Positional + flags
+myapp --help                              # Hierarchical help
+myapp build --help                        # Clap auto-generates detailed help
+```
+
+**Hierarchical `--help` output** (automatically generated):
+```
+myapp 1.0.0
+My awesome CLI application
+
+Usage: myapp [OPTIONS] <COMMAND>
+
+Other Commands:
+  build   Build the project
+  deploy  Deploy to environment
+  status
+
+Options:
+  -h, --help            Print help
+      --help --json     Show CLI schema (JSON format)
+  -V, --version         Print version
+```
+
+**Per-command `--help`** (via Clap):
+```
+$ myapp build --help
+Usage: cmd [OPTIONS]
+
+Options:
+      --release          Build in release mode
+  -j, --jobs <JOBS>      Number of parallel jobs [default: 4]
+  -h, --help             Print help
+```
+
+### Example (Enum API with Clap - Type-safe alternative)
 
 ```rust
-use sen::{CliResult, State, SenRouter};
+use sen::{Args, CliResult, State, SenRouter};
+use clap::Parser;
 
 // 1. Define application state
+#[derive(Clone)]
 pub struct AppState {
     pub config: String,
 }
 
-// 2. Define commands with derive macro
+// 2. Define arguments with Clap derive macro
+//    Same as Router API - just derive Parser on your argument types
+#[derive(Parser, Debug)]
+struct BuildArgs {
+    /// Build in release mode
+    #[arg(long)]
+    release: bool,
+
+    /// Number of parallel jobs
+    #[arg(short, long, default_value = "4")]
+    jobs: usize,
+}
+
+#[derive(Parser, Debug)]
+struct DeployArgs {
+    /// Target environment (positional argument)
+    environment: String,
+
+    /// Docker image tag
+    #[arg(long, default_value = "latest")]
+    tag: String,
+}
+
+// 3. Define commands with SenRouter derive macro
+//    This generates the execute() method and routing logic at compile-time
 #[derive(SenRouter)]
-#[sen(state = AppState)]
+#[sen(state = AppState)]  // Tell macro what State type to use
 enum Commands {
-    #[sen(handler = handlers::status)]
-    Status,
+    #[sen(handler = handlers::status, desc = "Show application status")]
+    Status,  // No arguments
 
-    #[sen(handler = handlers::build)]
-    Build(BuildArgs),
+    #[sen(handler = handlers::build, desc = "Build the project")]
+    Build(BuildArgs),  // With Clap-parsed arguments
+
+    #[sen(handler = handlers::deploy, desc = "Deploy to environment")]
+    Deploy(DeployArgs),  // Compiler checks ALL variants have handlers!
 }
 
-pub struct BuildArgs {
-    pub release: bool,
-}
+// The macro also generates Commands::help() for displaying all commands
+// Example: println!("{}", Commands::help());
 
-// 3. Implement handlers as async functions
+// 4. Implement handlers as async functions
+//    Same signature style as Router API
 mod handlers {
     use super::*;
 
+    // Handler with State only
     pub async fn status(state: State<AppState>) -> CliResult<String> {
         let app = state.read().await;
-        Ok(format!("Config: {}", app.config))
+        Ok(format!("Status: OK (config: {})", app.config))
     }
 
-    pub async fn build(state: State<AppState>, args: BuildArgs) -> CliResult<()> {
+    // Handler with State + Args
+    pub async fn build(
+        state: State<AppState>,
+        Args(args): Args<BuildArgs>,  // 👈 Clap automatically parses here!
+    ) -> CliResult<String> {
+        let app = state.read().await;
         let mode = if args.release { "release" } else { "debug" };
-        println!("Building in {} mode", mode);
-        Ok(())
+        Ok(format!("Building in {} mode with {} jobs (config: {})",
+                   mode, args.jobs, app.config))
+    }
+
+    // Order doesn't matter! Args can come before State
+    pub async fn deploy(
+        Args(args): Args<DeployArgs>,  // 👈 Automatic parsing via Clap!
+        state: State<AppState>,
+    ) -> CliResult<String> {
+        let app = state.read().await;
+        Ok(format!("Deploying to {} with tag {} (config: {})",
+                   args.environment, args.tag, app.config))
     }
 }
 
-// 4. Wire it up (< 50 lines of main.rs)
+// 5. Wire it up (< 30 lines of main.rs)
 #[tokio::main]
 async fn main() {
+    // Create application state (shared across all handlers)
     let state = State::new(AppState {
         config: "production".to_string(),
     });
 
-    let cmd = Commands::parse(); // Your arg parsing logic
-    let response = cmd.execute(state).await; // Macro-generated async execute!
+    // Parse command from CLI arguments (your parsing logic)
+    let cmd = Commands::parse();
 
+    // Execute! The macro-generated execute() method handles routing
+    let response = cmd.execute(state).await;
+
+    // Print output and exit with proper code
     if !response.output.is_empty() {
         println!("{}", response.output);
     }
@@ -137,10 +295,11 @@ async fn main() {
 }
 ```
 
-That's it! The `#[derive(SenRouter)]` macro generates the `execute()` method that:
-- Routes commands to handlers
-- Injects `State<T>` and args automatically
-- Converts results into responses with proper exit codes
+**Key Features of Enum API:**
+- **Compile-time safety**: `#[derive(SenRouter)]` macro generates the `execute()` method
+- **Exhaustive matching**: Compiler ensures all commands have handlers
+- **Clap integration**: Just add `#[derive(Parser)]` to argument types
+- **Type-driven DI**: Automatically injects `State<T>` and `Args<T>` based on handler signatures
 
 ## 📁 Project Structure
 
@@ -229,7 +388,65 @@ The value 'bar' is not supported.
 Hint: Use one of: baz, qux
 ```
 
-### 4. No Println! in Handlers
+### 4. Professional Help Generation
+
+**Automatic hierarchical grouping** - Commands are organized by prefix:
+
+```
+$ myctl --help
+
+Configuration Commands:
+  edit      Edit configuration in editor
+  init      Initialize configuration file
+  show      Show current configuration
+
+Database Commands:
+  create    Create a new database
+  delete    Delete a database
+  list      List all databases
+
+Server Commands:
+  start     Start server instances
+  stop      Stop server instances
+```
+
+**Clap integration** - Per-command help with full argument details:
+
+```
+$ myctl db create --help
+Usage: cmd [OPTIONS] <NAME>
+
+Arguments:
+  <NAME>  Database name
+
+Options:
+      --size <SIZE>      Storage size [default: 10GB]
+      --engine <ENGINE>  Database engine [default: postgres]
+  -h, --help             Print help
+```
+
+**JSON schema export** for AI agents and IDEs:
+
+```bash
+$ myctl --help --json
+{
+  "commands": {
+    "db:create": {
+      "description": "Create a new database",
+      "arguments": [...],
+      "options": [...]
+    }
+  }
+}
+```
+
+**How grouping works:**
+- Commands with `:` prefix are automatically grouped (e.g., `db:create` → "Database Commands")
+- Commands are displayed with just the suffix (e.g., `create` instead of `db:create`)
+- Groups are sorted alphabetically, with "Other Commands" last
+- Use `#[sen::handler(desc = "...")]` to add descriptions
+
+### 5. No Println! in Handlers
 
 Handlers return structured data, framework handles output:
 
@@ -321,42 +538,76 @@ For complex scenarios with global options, you can still manually implement agen
 - **Tier & Tags**: Safety tier and command categorization metadata
 - **Structured Errors**: Exit codes and error messages in machine-readable format
 
-## 💡 Argument Parsing: `FromArgs` vs Global Options
+## 💡 Argument Parsing: Clap Integration (Recommended)
 
-SEN provides multiple approaches for argument parsing, each suited for different use cases.
+SEN has **built-in Clap integration** - the de-facto standard for Rust CLI argument parsing.
 
-### Simple Cases: Use `FromArgs`
+### 🚀 Use Clap (Recommended for 99% of CLIs)
 
-For per-command arguments without global flags:
+Simply derive `clap::Parser` on your argument types:
+
+**Step 1**: Enable the `clap` feature:
+
+```toml
+[dependencies]
+sen = { version = "0.1", features = ["clap"] }
+clap = { version = "4", features = ["derive"] }
+```
+
+**Step 2**: Define arguments with `#[derive(Parser)]`:
 
 ```rust
-use sen::{Args, FromArgs, CliError};
+use sen::{Args, CliResult};
+use clap::Parser;
 
-#[derive(Debug)]
+#[derive(Parser, Debug)]
 struct BuildArgs {
+    /// Build in release mode
+    #[arg(long)]
     release: bool,
-}
 
-impl FromArgs for BuildArgs {
-    fn from_args(args: &[String]) -> Result<Self, CliError> {
-        Ok(BuildArgs {
-            release: args.contains(&"--release".to_string()),
-        })
-    }
+    /// Number of parallel jobs
+    #[arg(short, long, default_value = "4")]
+    jobs: usize,
 }
 
 async fn build(Args(args): Args<BuildArgs>) -> CliResult<String> {
     let mode = if args.release { "release" } else { "debug" };
-    Ok(format!("Building in {} mode", mode))
+    Ok(format!("Building in {} mode with {} jobs", mode, args.jobs))
 }
 ```
 
-**Use `FromArgs` when:**
-- ✅ You have simple per-command arguments
-- ✅ No global flags needed (`--verbose`, `--config`, etc.)
-- ✅ You want the framework to handle everything
+**Step 3**: Register the handler - that's it!
 
-### Complex Cases: Use Global Options + Manual Parsing
+```rust
+let router = Router::new()
+    .route("build", build)
+    .with_state(state);
+```
+
+**How it works**: When the `clap` feature is enabled, SEN automatically implements `FromArgs` for any type implementing `clap::Parser`. Zero boilerplate required.
+
+**Benefits**:
+- ✅ Automatic help generation (`--help`)
+- ✅ Type-safe with compile-time validation
+- ✅ Supports complex options (enums, lists, subcommands)
+- ✅ Battle-tested (used by cargo, ripgrep, etc.)
+- ✅ **Recommended for all production CLIs**
+
+**Example `--help` output** (auto-generated from your `#[arg]` attributes):
+```bash
+$ myapp build --help
+Usage: myapp build [OPTIONS]
+
+Options:
+      --release          Build in release mode
+  -j, --jobs <JOBS>      Number of parallel jobs [default: 4]
+  -h, --help             Print help
+```
+
+All the documentation comments (`///`) in your struct become help text automatically!
+
+### Global Options (For CLI-wide Flags)
 
 For applications with global flags that apply to all commands:
 
@@ -403,9 +654,45 @@ The `practical-cli` example intentionally uses `FromGlobalArgs` instead of `From
 3. **Flexibility**: Manual parsing allows complex validation
 4. **Real-world pattern**: Mirrors production CLI tools like `kubectl`, `docker`, etc.
 
-**Key Insight:** `FromArgs` is a convenience feature, not required. For complex CLIs, manual parsing gives you full control.
+**Key Insight:** For complex CLIs with global flags, use `FromGlobalArgs` to parse them once, then use Clap's `#[derive(Parser)]` for per-command arguments.
 
-See `examples/practical-cli` for a complete implementation.
+See `examples/practical-cli` for a complete production-ready example showing:
+- Global flags with `FromGlobalArgs`
+- Per-command arguments with Clap's `#[derive(Parser)]`
+- Nested routers for organizing commands by resource
+
+### Advanced: Manual `FromArgs` Implementation (Rarely Needed)
+
+If you need custom parsing logic and **cannot** use Clap, you can manually implement `FromArgs`:
+
+```rust
+use sen::{Args, FromArgs, CliError, CliResult};
+
+#[derive(Debug)]
+struct CustomArgs {
+    flag: bool,
+}
+
+impl FromArgs for CustomArgs {
+    fn from_args(args: &[String]) -> Result<Self, CliError> {
+        // Your custom parsing logic
+        Ok(CustomArgs {
+            flag: args.contains(&"--flag".to_string()),
+        })
+    }
+}
+
+async fn handler(Args(args): Args<CustomArgs>) -> CliResult<String> {
+    Ok(format!("Flag: {}", args.flag))
+}
+```
+
+**Only use manual `FromArgs` when:**
+- ❌ Clap doesn't support your use case (very rare)
+- ❌ You need parsing logic that's impossible to express in Clap
+- ❌ You're integrating with a non-Clap parser
+
+**For 99% of use cases, use Clap's `#[derive(Parser)]` instead.**
 
 ## 🏗️ Architecture
 

@@ -272,7 +272,10 @@ impl CliError {
     /// Get the appropriate exit code for this error.
     pub fn exit_code(&self) -> i32 {
         match self {
-            CliError::User(_) => 1,
+            CliError::User(user_err) => match user_err {
+                UserError::Help(_) => 0, // Help is a successful exit
+                _ => 1,
+            },
             CliError::System(_) => 101,
         }
     }
@@ -294,6 +297,11 @@ pub enum UserError {
     /// Generic user error with a message.
     #[error("Error: {0}")]
     Generic(String),
+
+    /// Help message (exit code 0 - success).
+    /// This is used when --help is requested.
+    #[error("{0}")]
+    Help(String),
 
     /// Invalid argument provided.
     #[error("Error: Invalid argument '{arg}'\n\n{reason}")]
@@ -509,7 +517,16 @@ impl<T: IntoResponse> IntoResponse for CliResult<T> {
             Ok(value) => value.into_response(),
             Err(e) => {
                 let exit_code = e.exit_code();
-                let message = match e {
+                let message = match &e {
+                    CliError::User(UserError::Help(help_text)) => {
+                        // Help is a successful operation, return as text response with exit code 0
+                        return Response {
+                            output: Output::Text(help_text.clone()),
+                            exit_code: 0,
+                            agent_mode: false,
+                            metadata: None,
+                        };
+                    }
                     CliError::User(user_err) => format!("{}", user_err),
                     CliError::System(sys_err) => format!("{}", sys_err),
                 };
@@ -1215,22 +1232,23 @@ impl Router<()> {
             }
         }
 
-        // Handle --help flag
-        if command_args_slice.contains(&"--help".to_string())
-            || command_args_slice.contains(&"-h".to_string())
+        // Handle --help flag ONLY if no command is specified yet
+        // If a command is specified (e.g., "build --help"), let Clap handle it
+        if command_args_slice.is_empty()
+            || (command_args_slice.len() == 1
+                && (command_args_slice[0] == "--help" || command_args_slice[0] == "-h"))
         {
-            // Check if JSON format is requested
-            let json_output = command_args_slice.contains(&"--json".to_string())
-                || command_args_slice
-                    .iter()
-                    .any(|a| a.starts_with("--format=json"));
-            let mut response = self.generate_help(command_args_slice, json_output);
+            // Show general CLI help
+            let mut response = self.generate_help(&[], false);
             response.agent_mode = agent_mode_active;
             return response;
         }
 
-        if command_args_slice.is_empty() {
-            let mut response = self.generate_help(&[], false);
+        // Handle --help --json for schema output
+        if command_args_slice.contains(&"--help".to_string())
+            && command_args_slice.contains(&"--json".to_string())
+        {
+            let mut response = self.generate_help(command_args_slice, true);
             response.agent_mode = agent_mode_active;
             return response;
         }
@@ -1283,6 +1301,7 @@ impl Router<()> {
     fn generate_help_text(&self) -> Response {
         let mut help = String::new();
 
+        // Header: name + version + about
         if let Some(meta) = &self.metadata {
             help.push_str(meta.name);
             if let Some(version) = meta.version {
@@ -1296,6 +1315,7 @@ impl Router<()> {
             help.push('\n');
         }
 
+        // Usage line
         help.push_str("Usage: ");
         if let Some(meta) = &self.metadata {
             help.push_str(meta.name);
@@ -1304,24 +1324,124 @@ impl Router<()> {
         }
         help.push_str(" [OPTIONS] <COMMAND>\n\n");
 
-        help.push_str("Commands:\n");
+        // Group commands by prefix (e.g., "db:*" -> "Database Commands")
+        let grouped_commands = self.group_commands_by_prefix();
+
+        // Display grouped commands
+        for (group_name, commands) in &grouped_commands {
+            if !group_name.is_empty() {
+                help.push_str(&format!("{}:\n", group_name));
+            } else {
+                help.push_str("Commands:\n");
+            }
+
+            // Calculate max command name length for this group
+            let max_len = commands
+                .iter()
+                .map(|(name, _, _)| name.len())
+                .max()
+                .unwrap_or(0);
+
+            for (name, _full_name, desc) in commands {
+                if desc.is_empty() {
+                    help.push_str(&format!("  {}\n", name));
+                } else {
+                    help.push_str(&format!("  {:width$}  {}\n", name, desc, width = max_len));
+                }
+            }
+            help.push('\n');
+        }
+
+        // Options section
+        help.push_str("Options:\n");
+        help.push_str("  -h, --help            Print help\n");
+        help.push_str("      --help --json     Show CLI schema (JSON format)\n");
+        if self.metadata.as_ref().and_then(|m| m.version).is_some() {
+            help.push_str("  -V, --version         Print version\n");
+        }
+
+        Response::text(help)
+    }
+
+    /// Group commands by their prefix (e.g., "db:*" -> "Database Commands").
+    /// Returns groups in order: named groups first (sorted), then "Other Commands" last.
+    fn group_commands_by_prefix(&self) -> Vec<(String, Vec<(String, String, String)>)> {
+        use std::collections::HashMap;
+
+        let mut groups: HashMap<String, Vec<(String, String, String)>> = HashMap::new();
         let mut commands: Vec<_> = self.routes.keys().collect();
         commands.sort();
 
         for cmd in commands {
-            help.push_str(&format!("  {}\n", cmd));
+            let desc = self
+                .route_metadata
+                .get(cmd.as_str())
+                .and_then(|meta| meta.get_description())
+                .unwrap_or("");
+
+            // Check if command has a prefix (e.g., "db:create" -> prefix "db")
+            if let Some(colon_pos) = cmd.find(':') {
+                let prefix = &cmd[..colon_pos];
+                let suffix = &cmd[colon_pos + 1..];
+
+                // Generate group name (e.g., "db" -> "Database Commands")
+                let group_name = self.format_group_name(prefix);
+
+                groups
+                    .entry(group_name)
+                    .or_insert_with(Vec::new)
+                    .push((suffix.to_string(), cmd.to_string(), desc.to_string()));
+            } else {
+                // No prefix - add to "Other Commands"
+                groups
+                    .entry("Other Commands".to_string())
+                    .or_insert_with(Vec::new)
+                    .push((cmd.to_string(), cmd.to_string(), desc.to_string()));
+            }
         }
 
-        help.push_str("\nOptions:\n");
-        help.push_str("  -h, --help            Show help\n");
-        help.push_str(
-            "  -h, --help --json     Show CLI schema (all commands with arguments/options)\n",
-        );
-        if self.metadata.as_ref().and_then(|m| m.version).is_some() {
-            help.push_str("  -V, --version         Show version\n");
+        // Sort commands within each group
+        for (_, commands) in groups.iter_mut() {
+            commands.sort_by(|a, b| a.0.cmp(&b.0));
         }
 
-        Response::text(help)
+        // Sort groups: named groups alphabetically, "Other Commands" last
+        let mut result: Vec<_> = groups.into_iter().collect();
+        result.sort_by(|a, b| {
+            if a.0 == "Other Commands" {
+                std::cmp::Ordering::Greater
+            } else if b.0 == "Other Commands" {
+                std::cmp::Ordering::Less
+            } else {
+                a.0.cmp(&b.0)
+            }
+        });
+
+        result
+    }
+
+    /// Format a command prefix into a nice group name.
+    /// Examples: "db" -> "Database Commands", "config" -> "Configuration Commands"
+    fn format_group_name(&self, prefix: &str) -> String {
+        let capitalized = match prefix {
+            "db" => "Database",
+            "config" => "Configuration",
+            "deploy" => "Deployment",
+            "server" => "Server",
+            "network" => "Network",
+            "storage" => "Storage",
+            _ => {
+                // Default: capitalize first letter
+                let mut chars = prefix.chars();
+                match chars.next() {
+                    None => return "Commands".to_string(),
+                    Some(first) => {
+                        return format!("{}{} Commands", first.to_uppercase(), chars.collect::<String>());
+                    }
+                }
+            }
+        };
+        format!("{} Commands", capitalized)
     }
 
     /// Generate CLI schema JSON specification.
@@ -1706,7 +1826,19 @@ where
             .chain(args.iter().cloned())
             .collect::<Vec<_>>();
 
-        T::try_parse_from(args_with_cmd).map_err(|e| CliError::user(e.to_string()))
+        T::try_parse_from(args_with_cmd).map_err(|e| {
+            // Clap's DisplayHelp and DisplayVersion are not errors - they're successful exits
+            // We want to preserve the formatted output, not treat it as an error
+            use clap::error::ErrorKind;
+            match e.kind() {
+                ErrorKind::DisplayHelp | ErrorKind::DisplayVersion => {
+                    // Extract the formatted help/version text and return as Help variant
+                    // This will result in exit code 0
+                    CliError::User(UserError::Help(e.to_string()))
+                }
+                _ => CliError::user(e.to_string()),
+            }
+        })
     }
 
     fn cli_schema() -> Option<serde_json::Value> {

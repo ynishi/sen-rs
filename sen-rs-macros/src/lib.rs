@@ -1,7 +1,7 @@
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::{
-    parse::{Parse, ParseStream},
+    parse::{Parse, ParseStream, Parser},
     parse_macro_input, Data, DeriveInput, Fields, ItemFn, Token,
 };
 
@@ -42,12 +42,13 @@ pub fn derive_sen_router(input: TokenStream) -> TokenStream {
     let state_type = extract_state_type(&input.attrs)
         .expect("Missing #[sen(state = YourStateType)] attribute on enum");
 
-    // Generate match arms for each variant
-    let match_arms = match &input.data {
-        Data::Enum(data) => data
-            .variants
-            .iter()
-            .map(|variant| {
+    // Generate match arms and collect metadata for each variant
+    let (match_arms, help_entries) = match &input.data {
+        Data::Enum(data) => {
+            let mut arms = Vec::new();
+            let mut help = Vec::new();
+
+            for variant in &data.variants {
                 let variant_name = &variant.ident;
                 let handler_path = extract_handler(&variant.attrs)
                     .unwrap_or_else(|| {
@@ -57,7 +58,26 @@ pub fn derive_sen_router(input: TokenStream) -> TokenStream {
                         )
                     });
 
-                match &variant.fields {
+                // Extract description if available
+                let desc = extract_desc(&variant.attrs);
+
+                // Convert variant name to command name (e.g., "Build" -> "build")
+                let cmd_name = variant_name.to_string().to_lowercase();
+
+                // Generate help entry
+                let help_entry = if let Some(d) = desc {
+                    quote! {
+                        (#cmd_name, Some(#d))
+                    }
+                } else {
+                    quote! {
+                        (#cmd_name, None)
+                    }
+                };
+                help.push(help_entry);
+
+                // Generate match arm
+                let arm = match &variant.fields {
                     Fields::Unit => {
                         // No args, only inject state
                         quote! {
@@ -77,21 +97,52 @@ pub fn derive_sen_router(input: TokenStream) -> TokenStream {
                     Fields::Named(_) => {
                         panic!("Named fields are not supported in SenRouter. Use tuple variants or unit variants.");
                     }
-                }
-            })
-            .collect::<Vec<_>>(),
+                };
+                arms.push(arm);
+            }
+
+            (arms, help)
+        }
         _ => panic!("SenRouter can only be derived for enums"),
     };
 
     // Generate the implementation
     let expanded = quote! {
         impl #enum_name {
+            /// Execute the command with the given state.
             pub async fn execute(self, state: sen::State<#state_type>) -> sen::Response {
                 use sen::IntoResponse;
 
                 match self {
                     #(#match_arms)*
                 }
+            }
+
+            /// Get metadata for all commands (name -> description).
+            pub fn commands_metadata() -> Vec<(&'static str, Option<&'static str>)> {
+                vec![
+                    #(#help_entries),*
+                ]
+            }
+
+            /// Generate help text for all commands.
+            pub fn help() -> String {
+                let mut help = String::new();
+                help.push_str("Commands:\n");
+
+                let metadata = Self::commands_metadata();
+                // Calculate max command length for alignment
+                let max_len = metadata.iter().map(|(cmd, _)| cmd.len()).max().unwrap_or(0);
+
+                for (cmd, desc) in metadata {
+                    if let Some(d) = desc {
+                        help.push_str(&format!("  {:width$}  {}\n", cmd, d, width = max_len));
+                    } else {
+                        help.push_str(&format!("  {}\n", cmd));
+                    }
+                }
+
+                help
             }
         }
     };
@@ -130,12 +181,47 @@ fn extract_handler(attrs: &[syn::Attribute]) -> Option<syn::Path> {
         if attr.path().is_ident("sen") {
             if let Ok(meta_list) = attr.meta.require_list() {
                 let tokens = &meta_list.tokens;
-                let parsed: Result<syn::MetaNameValue, _> = syn::parse2(tokens.clone());
 
-                if let Ok(nv) = parsed {
-                    if nv.path.is_ident("handler") {
-                        if let syn::Expr::Path(expr_path) = nv.value {
-                            return Some(expr_path.path);
+                // Try to parse as comma-separated list of name=value pairs
+                let parsed =
+                    syn::punctuated::Punctuated::<syn::MetaNameValue, Token![,]>::parse_terminated
+                        .parse2(tokens.clone());
+
+                if let Ok(pairs) = parsed {
+                    for nv in &pairs {
+                        if nv.path.is_ident("handler") {
+                            if let syn::Expr::Path(expr_path) = &nv.value {
+                                return Some(expr_path.path.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Extract the description from #[sen(desc = "...")]
+fn extract_desc(attrs: &[syn::Attribute]) -> Option<String> {
+    for attr in attrs {
+        if attr.path().is_ident("sen") {
+            if let Ok(meta_list) = attr.meta.require_list() {
+                let tokens = &meta_list.tokens;
+
+                // Try to parse as comma-separated list of name=value pairs
+                let parsed =
+                    syn::punctuated::Punctuated::<syn::MetaNameValue, Token![,]>::parse_terminated
+                        .parse2(tokens.clone());
+
+                if let Ok(pairs) = parsed {
+                    for nv in &pairs {
+                        if nv.path.is_ident("desc") {
+                            if let syn::Expr::Lit(expr_lit) = &nv.value {
+                                if let syn::Lit::Str(lit_str) = &expr_lit.lit {
+                                    return Some(lit_str.value());
+                                }
+                            }
                         }
                     }
                 }
