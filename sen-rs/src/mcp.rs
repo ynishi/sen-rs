@@ -198,6 +198,75 @@ pub fn run_mcp_server(tools: Vec<McpTool>) -> Response {
     }
 }
 
+/// Generate MCP configuration JSON for a given client
+///
+/// This function outputs the MCP server configuration JSON to stdout,
+/// which users can copy into their client's configuration file.
+///
+/// # Arguments
+///
+/// * `client` - Client name (e.g., "claude", "cline")
+/// * `command_path` - Path to the CLI executable
+/// * `tools` - List of available MCP tools
+///
+/// # Returns
+///
+/// A Response with the configuration JSON in the output
+pub fn generate_mcp_config(client: &str, command_path: String, tools: Vec<McpTool>) -> Response {
+    // Get executable name from path
+    let exe_name = std::path::Path::new(&command_path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("myctl");
+
+    // Generate the mcpServers configuration
+    let config = json!({
+        "mcpServers": {
+            exe_name: {
+                "command": command_path,
+                "args": ["--mcp-server"],
+                "metadata": {
+                    "description": format!("{} MCP server", exe_name),
+                    "toolCount": tools.len()
+                }
+            }
+        }
+    });
+
+    // Output instructions to stderr
+    eprintln!("\n=== MCP Configuration for {} ===\n", client);
+    eprintln!("Copy the JSON below and merge it into your {} configuration file:", client);
+
+    match client {
+        "claude" => {
+            eprintln!("  macOS: ~/Library/Application Support/Claude/claude_desktop_config.json");
+            eprintln!("  Windows: %APPDATA%/Claude/claude_desktop_config.json");
+        }
+        "cline" => {
+            eprintln!("  VS Code: Settings → Extensions → Cline → MCP Settings");
+        }
+        _ => {
+            eprintln!("  (Please refer to your client's documentation for the config file location)");
+        }
+    }
+
+    eprintln!("\nAvailable tools: {}", tools.len());
+    eprintln!("Tool names: {}\n", tools.iter().map(|t| t.name.as_str()).collect::<Vec<_>>().join(", "));
+    eprintln!("--- Configuration JSON ---\n");
+
+    // Output the JSON to stdout (so users can pipe it to a file if needed)
+    let config_str = serde_json::to_string_pretty(&config)
+        .unwrap_or_else(|_| "{}".to_string());
+
+    Response {
+        exit_code: 0,
+        output: Output::Text(config_str),
+        agent_mode: false,
+        #[cfg(feature = "sensors")]
+        metadata: None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -262,5 +331,45 @@ mod tests {
         assert_eq!(tool.description, "No description available");
         assert_eq!(tool.input_schema["type"], "object");
         assert_eq!(tool.input_schema["properties"], json!({}));
+    }
+
+    #[test]
+    fn test_generate_mcp_config() {
+        let tools = vec![
+            McpTool {
+                name: "test-tool".to_string(),
+                description: "Test tool description".to_string(),
+                input_schema: json!({"type": "object"}),
+            },
+        ];
+
+        let response = generate_mcp_config("claude", "/usr/bin/myctl".to_string(), tools);
+
+        assert_eq!(response.exit_code, 0);
+        assert!(!response.agent_mode);
+
+        // Check that output contains valid JSON
+        if let Output::Text(output) = response.output {
+            let parsed: serde_json::Value = serde_json::from_str(&output).unwrap();
+            assert!(parsed.get("mcpServers").is_some());
+            assert!(parsed["mcpServers"].get("myctl").is_some());
+            assert_eq!(parsed["mcpServers"]["myctl"]["command"], "/usr/bin/myctl");
+            assert_eq!(parsed["mcpServers"]["myctl"]["args"], json!(["--mcp-server"]));
+        } else {
+            panic!("Expected text output");
+        }
+    }
+
+    #[test]
+    fn test_generate_mcp_config_extracts_exe_name() {
+        let tools = vec![];
+        let response = generate_mcp_config("cline", "/path/to/my-awesome-cli".to_string(), tools);
+
+        if let Output::Text(output) = response.output {
+            let parsed: serde_json::Value = serde_json::from_str(&output).unwrap();
+            assert!(parsed["mcpServers"].get("my-awesome-cli").is_some());
+        } else {
+            panic!("Expected text output");
+        }
     }
 }

@@ -1160,10 +1160,31 @@ impl Router<()> {
                 return crate::mcp::run_mcp_server(tools);
             }
 
-            // Handle --mcp-init flag (will be implemented next)
-            if command_args_slice.iter().any(|arg| arg == "--mcp-init") {
-                // TODO: Implement --mcp-init
-                return Response::error(1, "--mcp-init not yet implemented");
+            // Handle --mcp-init flag
+            if let Some(pos) = command_args_slice.iter().position(|arg| arg == "--mcp-init") {
+                // Get client name (next argument after --mcp-init)
+                let client = command_args_slice
+                    .get(pos + 1)
+                    .map(|s| s.as_str())
+                    .unwrap_or("claude");
+
+                // Get command path (first arg in original args, or current executable)
+                let command_path = args
+                    .get(0)
+                    .cloned()
+                    .or_else(|| std::env::current_exe().ok().and_then(|p| p.to_str().map(String::from)))
+                    .unwrap_or_else(|| "myctl".to_string());
+
+                // Convert route_metadata to MCP tool schemas
+                let tools: Vec<crate::mcp::McpTool> = self
+                    .route_metadata
+                    .iter()
+                    .map(|(name, metadata)| {
+                        crate::mcp::McpTool::from_route_metadata(name.clone(), metadata)
+                    })
+                    .collect();
+
+                return crate::mcp::generate_mcp_config(client, command_path, tools);
             }
         }
 
