@@ -258,7 +258,7 @@ where
                                     "level": "info",
                                     "logger": "sen-rs.mcp",
                                     "data": format!("Executing tool: {}", tool_name)
-                                })
+                                }),
                             );
 
                             // Convert MCP arguments to CLI args
@@ -283,7 +283,7 @@ where
                                         tool_name,
                                         tool_response.exit_code
                                     )
-                                })
+                                }),
                             );
 
                             // Convert Response to MCP result
@@ -395,7 +395,10 @@ pub fn generate_mcp_config(client: &str, command_path: String, tools: Vec<McpToo
 
     // Output instructions to stderr
     eprintln!("\n=== MCP Configuration for {} ===\n", client);
-    eprintln!("Copy the JSON below and merge it into your {} configuration file:", client);
+    eprintln!(
+        "Copy the JSON below and merge it into your {} configuration file:",
+        client
+    );
 
     match client {
         "claude" => {
@@ -406,17 +409,25 @@ pub fn generate_mcp_config(client: &str, command_path: String, tools: Vec<McpToo
             eprintln!("  VS Code: Settings → Extensions → Cline → MCP Settings");
         }
         _ => {
-            eprintln!("  (Please refer to your client's documentation for the config file location)");
+            eprintln!(
+                "  (Please refer to your client's documentation for the config file location)"
+            );
         }
     }
 
     eprintln!("\nAvailable tools: {}", tools.len());
-    eprintln!("Tool names: {}\n", tools.iter().map(|t| t.name.as_str()).collect::<Vec<_>>().join(", "));
+    eprintln!(
+        "Tool names: {}\n",
+        tools
+            .iter()
+            .map(|t| t.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
     eprintln!("--- Configuration JSON ---\n");
 
     // Output the JSON to stdout (so users can pipe it to a file if needed)
-    let config_str = serde_json::to_string_pretty(&config)
-        .unwrap_or_else(|_| "{}".to_string());
+    let config_str = serde_json::to_string_pretty(&config).unwrap_or_else(|_| "{}".to_string());
 
     Response {
         exit_code: 0,
@@ -495,13 +506,11 @@ mod tests {
 
     #[test]
     fn test_generate_mcp_config() {
-        let tools = vec![
-            McpTool {
-                name: "test-tool".to_string(),
-                description: "Test tool description".to_string(),
-                input_schema: json!({"type": "object"}),
-            },
-        ];
+        let tools = vec![McpTool {
+            name: "test-tool".to_string(),
+            description: "Test tool description".to_string(),
+            input_schema: json!({"type": "object"}),
+        }];
 
         let response = generate_mcp_config("claude", "/usr/bin/myctl".to_string(), tools);
 
@@ -514,7 +523,10 @@ mod tests {
             assert!(parsed.get("mcpServers").is_some());
             assert!(parsed["mcpServers"].get("myctl").is_some());
             assert_eq!(parsed["mcpServers"]["myctl"]["command"], "/usr/bin/myctl");
-            assert_eq!(parsed["mcpServers"]["myctl"]["args"], json!(["--mcp-server"]));
+            assert_eq!(
+                parsed["mcpServers"]["myctl"]["args"],
+                json!(["--mcp-server"])
+            );
         } else {
             panic!("Expected text output");
         }

@@ -1158,7 +1158,10 @@ impl Router<()> {
                     .collect();
 
                 // Get program name for building full command args
-                let program_name = args.get(0).cloned().unwrap_or_else(|| "program".to_string());
+                let program_name = args
+                    .get(0)
+                    .cloned()
+                    .unwrap_or_else(|| "program".to_string());
 
                 return crate::mcp::run_mcp_server(tools, |tool_name, tool_args| {
                     // Build full args: ["program_name", "command", "subcommand", ...tool_args]
@@ -1178,7 +1181,10 @@ impl Router<()> {
             }
 
             // Handle --mcp-init flag
-            if let Some(pos) = command_args_slice.iter().position(|arg| arg == "--mcp-init") {
+            if let Some(pos) = command_args_slice
+                .iter()
+                .position(|arg| arg == "--mcp-init")
+            {
                 // Get client name (next argument after --mcp-init)
                 let client = command_args_slice
                     .get(pos + 1)
@@ -1189,7 +1195,11 @@ impl Router<()> {
                 let command_path = args
                     .get(0)
                     .cloned()
-                    .or_else(|| std::env::current_exe().ok().and_then(|p| p.to_str().map(String::from)))
+                    .or_else(|| {
+                        std::env::current_exe()
+                            .ok()
+                            .and_then(|p| p.to_str().map(String::from))
+                    })
                     .unwrap_or_else(|| "myctl".to_string());
 
                 // Convert route_metadata to MCP tool schemas
