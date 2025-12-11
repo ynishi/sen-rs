@@ -782,6 +782,7 @@ fn build_router(state: AppState) -> Router<()> {
         .route("version", handlers::version)
         .route("info", handlers::info)
         .with_agent_mode()  // Enable automatic --agent-mode flag handling
+        .with_mcp()  // Enable MCP server support
         .with_state(state)
 }
 

@@ -11,7 +11,7 @@ name = "myctl"
 path = "src/main.rs"
 
 [dependencies]
-sen = { path = "../../sen-rs", features = ["clap"] }
+sen = { path = "../../sen-rs", features = ["clap", "mcp"] }
 tokio = { version = "1.42", features = ["full"] }
 clap = { version = "4", features = ["derive", "env"] }
 clap_complete = "4"

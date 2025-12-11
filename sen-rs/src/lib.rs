@@ -72,6 +72,9 @@ pub mod tracing_support;
 #[cfg(feature = "sensors")]
 pub mod sensors;
 
+#[cfg(feature = "mcp")]
+pub mod mcp;
+
 // Re-export tracing itself (required for #[instrument] macro)
 #[cfg(feature = "tracing")]
 pub use tracing_support::tracing;
@@ -810,6 +813,8 @@ pub struct Router<S = ()> {
     route_metadata: HashMap<String, RouteMetadata>,
     metadata: Option<RouterMetadata>,
     agent_mode_enabled: bool,
+    #[cfg(feature = "mcp")]
+    mcp_enabled: bool,
     _marker: PhantomData<S>,
 }
 
@@ -833,6 +838,8 @@ where
             route_metadata: HashMap::new(),
             metadata: None,
             agent_mode_enabled: false,
+            #[cfg(feature = "mcp")]
+            mcp_enabled: false,
             _marker: PhantomData,
         }
     }
@@ -962,6 +969,30 @@ where
         self
     }
 
+    /// Enable MCP (Model Context Protocol) support.
+    ///
+    /// When enabled, the router will recognize and handle MCP-specific flags:
+    /// - `--mcp-server`: Start in MCP server mode (JSON-RPC over stdio)
+    /// - `--mcp-init <client>`: Generate MCP configuration for the specified client
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let router = Router::new()
+    ///     .route("build", handlers::build)
+    ///     .with_mcp()
+    ///     .with_state(state);
+    ///
+    /// // Usage:
+    /// // $ mycli --mcp-server              # Start MCP server
+    /// // $ mycli --mcp-init claude         # Generate claude_desktop_config.json
+    /// ```
+    #[cfg(feature = "mcp")]
+    pub fn with_mcp(mut self) -> Self {
+        self.mcp_enabled = true;
+        self
+    }
+
     /// Provide the application state, converting `Router<S>` to `Router<()>`.
     ///
     /// This follows Axum's pattern where the type system ensures all required
@@ -983,6 +1014,8 @@ where
             route_metadata: self.route_metadata,
             metadata: self.metadata,
             agent_mode_enabled: self.agent_mode_enabled,
+            #[cfg(feature = "mcp")]
+            mcp_enabled: self.mcp_enabled,
             _marker: PhantomData,
         }
     }
@@ -1093,6 +1126,35 @@ impl Router<()> {
         };
 
         let command_args_slice: &[String] = &command_args;
+
+        // Handle MCP flags if MCP is enabled
+        #[cfg(feature = "mcp")]
+        if self.mcp_enabled {
+            // Handle --mcp-server flag
+            if command_args_slice.contains(&"--mcp-server".to_string()) {
+                // Convert route_metadata to tools map
+                let tools: std::collections::HashMap<String, String> = self
+                    .route_metadata
+                    .iter()
+                    .map(|(name, metadata)| {
+                        let description = metadata
+                            .description
+                            .as_ref()
+                            .map(|d| d.to_string())
+                            .unwrap_or_else(|| "No description available".to_string());
+                        (name.clone(), description)
+                    })
+                    .collect();
+
+                return crate::mcp::run_mcp_server(tools);
+            }
+
+            // Handle --mcp-init flag (will be implemented next)
+            if command_args_slice.iter().any(|arg| arg == "--mcp-init") {
+                // TODO: Implement --mcp-init
+                return Response::error(1, "--mcp-init not yet implemented");
+            }
+        }
 
         // Handle --help flag
         if command_args_slice.contains(&"--help".to_string())
