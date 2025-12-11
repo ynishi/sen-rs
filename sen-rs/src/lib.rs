@@ -630,13 +630,29 @@ pub struct HandlerMetadata {
 /// Metadata for a specific route in the router.
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
-struct RouteMetadata {
+pub struct RouteMetadata {
     /// Handler-level metadata (from #[sen::handler])
     handler_meta: Option<HandlerMetadata>,
     /// Route description (can be set via .describe())
     description: Option<String>,
     /// CLI argument schema (from Clap, if available)
     args_schema: Option<serde_json::Value>,
+}
+
+impl RouteMetadata {
+    /// Get the description for this route
+    ///
+    /// Prefers route-level description over handler-level description
+    pub fn get_description(&self) -> Option<&str> {
+        self.description
+            .as_deref()
+            .or_else(|| self.handler_meta.as_ref()?.desc)
+    }
+
+    /// Get the CLI argument schema for this route
+    pub fn get_args_schema(&self) -> Option<&serde_json::Value> {
+        self.args_schema.as_ref()
+    }
 }
 
 /// Handler trait - allows functions with various signatures to be used as handlers.
@@ -1132,17 +1148,12 @@ impl Router<()> {
         if self.mcp_enabled {
             // Handle --mcp-server flag
             if command_args_slice.contains(&"--mcp-server".to_string()) {
-                // Convert route_metadata to tools map
-                let tools: std::collections::HashMap<String, String> = self
+                // Convert route_metadata to MCP tool schemas
+                let tools: Vec<crate::mcp::McpTool> = self
                     .route_metadata
                     .iter()
                     .map(|(name, metadata)| {
-                        let description = metadata
-                            .description
-                            .as_ref()
-                            .map(|d| d.to_string())
-                            .unwrap_or_else(|| "No description available".to_string());
-                        (name.clone(), description)
+                        crate::mcp::McpTool::from_route_metadata(name.clone(), metadata)
                     })
                     .collect();
 
