@@ -103,6 +103,25 @@ impl Default for McpServer {
     }
 }
 
+/// Send an MCP notification to stdout
+///
+/// # Arguments
+///
+/// * `method` - Notification method (e.g., "notifications/message")
+/// * `params` - Notification parameters as JSON value
+fn send_notification(method: &str, params: Value) {
+    let notification = json!({
+        "jsonrpc": "2.0",
+        "method": method,
+        "params": params
+    });
+
+    if let Ok(notification_str) = serde_json::to_string(&notification) {
+        println!("{}", notification_str);
+        std::io::stdout().flush().ok();
+    }
+}
+
 /// Convert MCP arguments (JSON object) to CLI arguments (Vec<String>)
 ///
 /// # Arguments
@@ -205,7 +224,8 @@ where
                             json!({
                                 "protocolVersion": "2024-11-05",
                                 "capabilities": {
-                                    "tools": {}
+                                    "tools": {},
+                                    "logging": {}
                                 },
                                 "serverInfo": {
                                     "name": "sen-rs MCP server",
@@ -231,11 +251,40 @@ where
                                 .cloned()
                                 .unwrap_or_else(|| json!({}));
 
+                            // Send notification: execution started
+                            send_notification(
+                                "notifications/message",
+                                json!({
+                                    "level": "info",
+                                    "logger": "sen-rs.mcp",
+                                    "data": format!("Executing tool: {}", tool_name)
+                                })
+                            );
+
                             // Convert MCP arguments to CLI args
                             let cli_args = convert_mcp_arguments_to_cli_args(&arguments);
 
                             // Execute the tool
                             let tool_response = execute_tool(tool_name, cli_args);
+
+                            // Send notification: execution completed
+                            let notification_level = if tool_response.exit_code == 0 {
+                                "info"
+                            } else {
+                                "error"
+                            };
+                            send_notification(
+                                "notifications/message",
+                                json!({
+                                    "level": notification_level,
+                                    "logger": "sen-rs.mcp",
+                                    "data": format!(
+                                        "Tool {} completed with exit code {}",
+                                        tool_name,
+                                        tool_response.exit_code
+                                    )
+                                })
+                            );
 
                             // Convert Response to MCP result
                             let mcp_result = match tool_response.output {
