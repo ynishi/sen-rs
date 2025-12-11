@@ -50,13 +50,12 @@ pub fn derive_sen_router(input: TokenStream) -> TokenStream {
 
             for variant in &data.variants {
                 let variant_name = &variant.ident;
-                let handler_path = extract_handler(&variant.attrs)
-                    .unwrap_or_else(|| {
-                        panic!(
-                            "Missing #[sen(handler = path::to::handler)] attribute on variant {}",
-                            variant_name
-                        )
-                    });
+                let handler_path = extract_handler(&variant.attrs).unwrap_or_else(|| {
+                    panic!(
+                        "Missing #[sen(handler = path::to::handler)] attribute on variant {}",
+                        variant_name
+                    )
+                });
 
                 // Extract description if available
                 let desc = extract_desc(&variant.attrs);

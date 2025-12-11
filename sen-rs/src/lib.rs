@@ -1387,15 +1387,16 @@ impl Router<()> {
                 // Generate group name (e.g., "db" -> "Database Commands")
                 let group_name = self.format_group_name(prefix);
 
-                groups
-                    .entry(group_name)
-                    .or_insert_with(Vec::new)
-                    .push((suffix.to_string(), cmd.to_string(), desc.to_string()));
+                groups.entry(group_name).or_default().push((
+                    suffix.to_string(),
+                    cmd.to_string(),
+                    desc.to_string(),
+                ));
             } else {
                 // No prefix - add to "Other Commands"
                 groups
                     .entry("Other Commands".to_string())
-                    .or_insert_with(Vec::new)
+                    .or_default()
                     .push((cmd.to_string(), cmd.to_string(), desc.to_string()));
             }
         }
@@ -1436,7 +1437,11 @@ impl Router<()> {
                 match chars.next() {
                     None => return "Commands".to_string(),
                     Some(first) => {
-                        return format!("{}{} Commands", first.to_uppercase(), chars.collect::<String>());
+                        return format!(
+                            "{}{} Commands",
+                            first.to_uppercase(),
+                            chars.collect::<String>()
+                        );
                     }
                 }
             }
