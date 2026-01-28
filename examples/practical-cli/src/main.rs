@@ -1,5 +1,5 @@
-use sen::{CliResult, State, Router, Args, init_subscriber, FromGlobalArgs, SensorData};
 use clap::Parser;
+use sen::{init_subscriber, Args, CliResult, FromGlobalArgs, Router, SensorData, State};
 
 // ============================================
 // Global Options (CLI-wide flags)
@@ -66,7 +66,13 @@ impl FromGlobalArgs for GlobalOpts {
             }
         }
 
-        Ok((GlobalOpts { verbose, config_path }, remaining_args))
+        Ok((
+            GlobalOpts {
+                verbose,
+                config_path,
+            },
+            remaining_args,
+        ))
     }
 }
 
@@ -322,7 +328,7 @@ mod handlers {
 
             if !args.force {
                 return Err(sen::CliError::user(
-                    "Delete requires --force flag for confirmation"
+                    "Delete requires --force flag for confirmation",
                 ));
             }
 
@@ -415,7 +421,9 @@ mod handlers {
                 println!("[DEBUG] Deploying app: {:?}", args);
             }
 
-            let image = args.image.unwrap_or_else(|| format!("{}:latest", args.app_name));
+            let image = args
+                .image
+                .unwrap_or_else(|| format!("{}:latest", args.app_name));
 
             Ok(format!(
                 "Deploying '{}'\n\
@@ -476,7 +484,8 @@ mod handlers {
 
             Ok("Networks:\n\
                 - vpc-prod (10.0.0.0/16)\n\
-                - vpc-dev (10.1.0.0/16)".to_string())
+                - vpc-dev (10.1.0.0/16)"
+                .to_string())
         }
     }
 
@@ -511,7 +520,8 @@ mod handlers {
 
             Ok("Buckets:\n\
                 - prod-assets (10GB)\n\
-                - backup-storage (50GB)".to_string())
+                - backup-storage (50GB)"
+                .to_string())
         }
     }
 
@@ -557,8 +567,9 @@ mod handlers {
 
             // Create parent directory if it doesn't exist
             if let Some(parent) = config_path.parent() {
-                fs::create_dir_all(parent)
-                    .map_err(|e| sen::CliError::system(format!("Failed to create directory: {}", e)))?;
+                fs::create_dir_all(parent).map_err(|e| {
+                    sen::CliError::system(format!("Failed to create directory: {}", e))
+                })?;
             }
 
             // Check if config already exists
@@ -570,11 +581,15 @@ mod handlers {
             }
 
             // Create default config
-            let default_config = "# myctl configuration file\napi_endpoint: https://api.example.com\ntimeout: 30\n";
+            let default_config =
+                "# myctl configuration file\napi_endpoint: https://api.example.com\ntimeout: 30\n";
             fs::write(&config_path, default_config)
                 .map_err(|e| sen::CliError::system(format!("Failed to write config: {}", e)))?;
 
-            Ok(format!("✓ Created configuration file: {}", config_path.display()))
+            Ok(format!(
+                "✓ Created configuration file: {}",
+                config_path.display()
+            ))
         }
 
         pub async fn path(state: State<AppState>) -> CliResult<String> {
@@ -600,7 +615,10 @@ mod handlers {
             serde_yaml::from_str::<serde_yaml::Value>(&content)
                 .map_err(|e| sen::CliError::user(format!("Invalid YAML syntax: {}", e)))?;
 
-            Ok(format!("✓ Configuration is valid: {}", config_path.display()))
+            Ok(format!(
+                "✓ Configuration is valid: {}",
+                config_path.display()
+            ))
         }
 
         pub async fn edit(state: State<AppState>) -> CliResult<String> {
@@ -645,7 +663,10 @@ mod handlers {
             pub shell: String,
         }
 
-        pub async fn generate_completion(_state: State<AppState>, Args(args): Args<CompletionArgs>) -> CliResult<String> {
+        pub async fn generate_completion(
+            _state: State<AppState>,
+            Args(args): Args<CompletionArgs>,
+        ) -> CliResult<String> {
             let shell = match args.shell.to_lowercase().as_str() {
                 "bash" => Shell::Bash,
                 "zsh" => Shell::Zsh,
@@ -664,21 +685,27 @@ mod handlers {
             let mut cmd = clap::Command::new("myctl")
                 .version("1.0.0")
                 .about("Cloud Resource Management CLI")
-                .subcommand(clap::Command::new("db")
-                    .subcommand(clap::Command::new("create"))
-                    .subcommand(clap::Command::new("list"))
-                    .subcommand(clap::Command::new("delete")))
-                .subcommand(clap::Command::new("server")
-                    .subcommand(clap::Command::new("start"))
-                    .subcommand(clap::Command::new("stop"))
-                    .subcommand(clap::Command::new("list")))
-                .subcommand(clap::Command::new("config")
-                    .subcommand(clap::Command::new("show"))
-                    .subcommand(clap::Command::new("set"))
-                    .subcommand(clap::Command::new("init"))
-                    .subcommand(clap::Command::new("path"))
-                    .subcommand(clap::Command::new("validate"))
-                    .subcommand(clap::Command::new("edit")))
+                .subcommand(
+                    clap::Command::new("db")
+                        .subcommand(clap::Command::new("create"))
+                        .subcommand(clap::Command::new("list"))
+                        .subcommand(clap::Command::new("delete")),
+                )
+                .subcommand(
+                    clap::Command::new("server")
+                        .subcommand(clap::Command::new("start"))
+                        .subcommand(clap::Command::new("stop"))
+                        .subcommand(clap::Command::new("list")),
+                )
+                .subcommand(
+                    clap::Command::new("config")
+                        .subcommand(clap::Command::new("show"))
+                        .subcommand(clap::Command::new("set"))
+                        .subcommand(clap::Command::new("init"))
+                        .subcommand(clap::Command::new("path"))
+                        .subcommand(clap::Command::new("validate"))
+                        .subcommand(clap::Command::new("edit")),
+                )
                 .subcommand(clap::Command::new("completion"));
 
             generate(shell, &mut cmd, "myctl", &mut io::stdout());
@@ -781,8 +808,8 @@ fn build_router(state: AppState) -> Router<()> {
         .route("completion", handlers::completion::generate_completion)
         .route("version", handlers::version)
         .route("info", handlers::info)
-        .with_agent_mode()  // Enable automatic --agent-mode flag handling
-        .with_mcp()  // Enable MCP server support
+        .with_agent_mode() // Enable automatic --agent-mode flag handling
+        .with_mcp() // Enable MCP server support
         .with_state(state)
 }
 
@@ -824,8 +851,8 @@ async fn main() {
     if response.agent_mode {
         let sensors = SensorData::collect();
         response = response.with_metadata(sen::ResponseMetadata {
-            tier: None,  // TODO: Extract from route metadata
-            tags: None,  // TODO: Extract from route metadata
+            tier: None, // TODO: Extract from route metadata
+            tags: None, // TODO: Extract from route metadata
             sensors: Some(sensors),
         });
     }
@@ -843,7 +870,6 @@ async fn main() {
 
     std::process::exit(response.exit_code);
 }
-
 
 fn format_error(e: &sen::CliError) -> String {
     match e {

@@ -1248,7 +1248,16 @@ impl Router<()> {
         if command_args_slice.contains(&"--help".to_string())
             && command_args_slice.contains(&"--json".to_string())
         {
-            let mut response = self.generate_help(command_args_slice, true);
+            let mut response = self.generate_cli_schema_json();
+            response.agent_mode = agent_mode_active;
+            return response;
+        }
+
+        // Handle --help --md for AI/Agent-friendly markdown output
+        if command_args_slice.contains(&"--help".to_string())
+            && command_args_slice.contains(&"--md".to_string())
+        {
+            let mut response = self.generate_help_markdown();
             response.agent_mode = agent_mode_active;
             return response;
         }
@@ -1297,7 +1306,7 @@ impl Router<()> {
         }
     }
 
-    /// Generate text-based help message.
+    /// Generate clean, human-readable help text for terminal display.
     fn generate_help_text(&self) -> Response {
         let mut help = String::new();
 
@@ -1310,22 +1319,30 @@ impl Router<()> {
             help.push('\n');
 
             if let Some(about) = meta.about {
-                help.push_str(&format!("{}\n", about));
+                help.push_str(about);
+                help.push('\n');
             }
             help.push('\n');
         }
 
         // Usage line
-        help.push_str("Usage: ");
-        if let Some(meta) = &self.metadata {
-            help.push_str(meta.name);
-        } else {
-            help.push_str("<command>");
-        }
-        help.push_str(" [OPTIONS] <COMMAND>\n\n");
+        let cli_name = self
+            .metadata
+            .as_ref()
+            .map(|m| m.name)
+            .unwrap_or("<command>");
+        help.push_str(&format!("Usage: {} [OPTIONS] <COMMAND>\n\n", cli_name));
 
-        // Group commands by prefix (e.g., "db:*" -> "Database Commands")
+        // Group commands by prefix
         let grouped_commands = self.group_commands_by_prefix();
+
+        // Calculate global max length for consistent alignment across all groups
+        let global_max_len = grouped_commands
+            .iter()
+            .flat_map(|(_, cmds)| cmds.iter().map(|(name, _, _)| name.len()))
+            .max()
+            .unwrap_or(8)
+            .max(8); // Minimum 8 chars
 
         // Display grouped commands
         for (group_name, commands) in &grouped_commands {
@@ -1335,18 +1352,16 @@ impl Router<()> {
                 help.push_str("Commands:\n");
             }
 
-            // Calculate max command name length for this group
-            let max_len = commands
-                .iter()
-                .map(|(name, _, _)| name.len())
-                .max()
-                .unwrap_or(0);
-
             for (name, _full_name, desc) in commands {
                 if desc.is_empty() {
                     help.push_str(&format!("  {}\n", name));
                 } else {
-                    help.push_str(&format!("  {:width$}  {}\n", name, desc, width = max_len));
+                    help.push_str(&format!(
+                        "  {:width$}  {}\n",
+                        name,
+                        desc,
+                        width = global_max_len
+                    ));
                 }
             }
             help.push('\n');
@@ -1355,12 +1370,126 @@ impl Router<()> {
         // Options section
         help.push_str("Options:\n");
         help.push_str("  -h, --help            Print help\n");
-        help.push_str("      --help --json     Show CLI schema (JSON format)\n");
+        help.push_str("      --help --md       Print help (Markdown format)\n");
+        help.push_str("      --help --json     Print CLI schema (JSON format)\n");
         if self.metadata.as_ref().and_then(|m| m.version).is_some() {
             help.push_str("  -V, --version         Print version\n");
         }
 
         Response::text(help)
+    }
+
+    /// Generate Markdown-formatted help for AI/Agent consumption.
+    ///
+    /// This format is designed to be:
+    /// - Parseable by LLMs and agents
+    /// - Rich with metadata (tiers, tags, arguments)
+    /// - Suitable for documentation generation
+    fn generate_help_markdown(&self) -> Response {
+        let mut md = String::new();
+
+        // Header
+        let cli_name = self.metadata.as_ref().map(|m| m.name).unwrap_or("CLI");
+        let version = self
+            .metadata
+            .as_ref()
+            .and_then(|m| m.version)
+            .unwrap_or("0.0.0");
+        let about = self
+            .metadata
+            .as_ref()
+            .and_then(|m| m.about)
+            .unwrap_or("Command-line interface");
+
+        md.push_str(&format!("# {} v{}\n\n", cli_name, version));
+        md.push_str(&format!("{}\n\n", about));
+
+        // Usage
+        md.push_str("## Usage\n\n");
+        md.push_str(&format!("```\n{} [OPTIONS] <COMMAND>\n```\n\n", cli_name));
+
+        // Commands by group
+        md.push_str("## Commands\n\n");
+
+        let grouped_commands = self.group_commands_by_prefix();
+
+        for (group_name, commands) in &grouped_commands {
+            if !group_name.is_empty() && group_name != "Other Commands" {
+                md.push_str(&format!("### {}\n\n", group_name));
+            } else if group_name == "Other Commands" {
+                md.push_str("### Other Commands\n\n");
+            }
+
+            md.push_str("| Command | Description | Tier | Tags |\n");
+            md.push_str("|---------|-------------|------|------|\n");
+
+            for (_name, full_name, desc) in commands {
+                // Get metadata for this command
+                let meta = self.route_metadata.get(full_name.as_str());
+                let handler_meta = meta.and_then(|m| m.handler_meta.as_ref());
+
+                let tier = handler_meta
+                    .and_then(|h| h.tier)
+                    .map(|t| t.as_str())
+                    .unwrap_or("-");
+
+                let tags = handler_meta
+                    .and_then(|h| h.tags.as_ref())
+                    .map(|t| t.join(", "))
+                    .unwrap_or_else(|| "-".to_string());
+
+                let desc_escaped = if desc.is_empty() {
+                    "-".to_string()
+                } else {
+                    desc.replace('|', "\\|")
+                };
+
+                md.push_str(&format!(
+                    "| `{}` | {} | {} | {} |\n",
+                    full_name, desc_escaped, tier, tags
+                ));
+            }
+            md.push('\n');
+        }
+
+        // Options
+        md.push_str("## Options\n\n");
+        md.push_str("| Option | Description |\n");
+        md.push_str("|--------|-------------|\n");
+        md.push_str("| `-h, --help` | Print help |\n");
+        md.push_str("| `--help --md` | Print help (Markdown format) |\n");
+        md.push_str("| `--help --json` | Print CLI schema (JSON format) |\n");
+        if self.metadata.as_ref().and_then(|m| m.version).is_some() {
+            md.push_str("| `-V, --version` | Print version |\n");
+        }
+        md.push('\n');
+
+        // Command Details (for AI context)
+        md.push_str("## Command Details\n\n");
+
+        let mut sorted_commands: Vec<_> = self.routes.keys().collect();
+        sorted_commands.sort();
+
+        for cmd in sorted_commands {
+            let meta = self.route_metadata.get(cmd.as_str());
+            let handler_meta = meta.and_then(|m| m.handler_meta.as_ref());
+            let desc = handler_meta.and_then(|h| h.desc).unwrap_or("");
+
+            md.push_str(&format!("### `{}`\n\n", cmd));
+
+            if !desc.is_empty() {
+                md.push_str(&format!("{}\n\n", desc));
+            }
+
+            // Show usage
+            md.push_str(&format!(
+                "```\n{} {}\n```\n\n",
+                cli_name,
+                cmd.replace(':', " ")
+            ));
+        }
+
+        Response::text(md)
     }
 
     /// Group commands by their prefix (e.g., "db:*" -> "Database Commands").
