@@ -7,6 +7,10 @@ Cargo.lock
 # WASM plugins (built artifacts)
 examples/wasm-cli/plugins/*.wasm
 
+# Zig
+zig-out/
+.zig-cache/
+
 # IDE
 .idea/
 .vscode/
