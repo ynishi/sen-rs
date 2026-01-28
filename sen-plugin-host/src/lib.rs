@@ -9,30 +9,33 @@
 //! ## Example
 //!
 //! ```rust,ignore
-//! use sen_plugin_host::{PluginLoader, PluginScanner, RouterPluginExt};
-//! use sen::Router;
+//! use sen_plugin_host::{PluginRegistry, HotReloadWatcher, WatcherConfig};
 //!
-//! // Scan directory for plugins
-//! let scanner = PluginScanner::new()?;
-//! let result = scanner.scan_directory("./plugins")?;
+//! // Create registry and start hot reload watcher
+//! let registry = PluginRegistry::new()?;
+//! let watcher = HotReloadWatcher::new(
+//!     registry.clone(),
+//!     vec!["./plugins"],
+//!     WatcherConfig::default(),
+//! ).await?;
 //!
-//! // Register all discovered plugins
-//! let mut router = Router::new();
-//! for plugin in result.plugins {
-//!     router = router.plugin(plugin);
-//! }
-//! let router = router.with_state(state);
+//! // Execute a plugin command
+//! let result = registry.execute("hello", &["World".to_string()]).await?;
 //! ```
 
 pub mod discovery;
 pub mod loader;
+pub mod registry;
+pub mod watcher;
 
 #[cfg(feature = "sen-integration")]
 pub mod bridge;
 
 pub use discovery::{default_plugin_dirs, DiscoveryError, DiscoveryResult, PluginScanner};
 pub use loader::{LoadedPlugin, LoaderError, PluginInstance, PluginLoader};
+pub use registry::{PluginRegistry, RegistryError};
 pub use sen_plugin_api::{ArgSpec, CommandSpec, ExecuteError, ExecuteResult, PluginManifest};
+pub use watcher::{HotReloadWatcher, WatcherConfig, WatcherError};
 
 #[cfg(feature = "sen-integration")]
 pub use bridge::{generate_plugin_help, register_plugins_from_spec, RouterPluginExt, WasmHandler};
