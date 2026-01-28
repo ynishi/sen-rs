@@ -1307,15 +1307,58 @@ impl Router<()> {
     }
 
     /// Generate clean, human-readable help text for terminal display.
+    ///
+    /// Supports colored output when stdout is a terminal.
     fn generate_help_text(&self) -> Response {
+        use anstyle::{AnsiColor, Effects, Style};
+
+        // Define styles
+        let use_color = std::io::IsTerminal::is_terminal(&std::io::stdout());
+
+        let header_style = if use_color {
+            Style::new()
+                .fg_color(Some(AnsiColor::Green.into()))
+                .effects(Effects::BOLD)
+        } else {
+            Style::new()
+        };
+
+        let section_style = if use_color {
+            Style::new()
+                .fg_color(Some(AnsiColor::Yellow.into()))
+                .effects(Effects::BOLD)
+        } else {
+            Style::new()
+        };
+
+        let cmd_style = if use_color {
+            Style::new().fg_color(Some(AnsiColor::Cyan.into()))
+        } else {
+            Style::new()
+        };
+
+        let dim_style = if use_color {
+            Style::new().effects(Effects::DIMMED)
+        } else {
+            Style::new()
+        };
+
+        let reset = if use_color {
+            Style::new().render_reset().to_string()
+        } else {
+            String::new()
+        };
+
         let mut help = String::new();
 
         // Header: name + version + about
         if let Some(meta) = &self.metadata {
+            help.push_str(&format!("{}", header_style.render()));
             help.push_str(meta.name);
             if let Some(version) = meta.version {
                 help.push_str(&format!(" {}", version));
             }
+            help.push_str(&reset);
             help.push('\n');
 
             if let Some(about) = meta.about {
@@ -1331,7 +1374,12 @@ impl Router<()> {
             .as_ref()
             .map(|m| m.name)
             .unwrap_or("<command>");
-        help.push_str(&format!("Usage: {} [OPTIONS] <COMMAND>\n\n", cli_name));
+        help.push_str(&format!(
+            "{}Usage:{} {} [OPTIONS] <COMMAND>\n\n",
+            section_style.render(),
+            reset,
+            cli_name
+        ));
 
         // Group commands by prefix
         let grouped_commands = self.group_commands_by_prefix();
@@ -1347,19 +1395,28 @@ impl Router<()> {
         // Display grouped commands
         for (group_name, commands) in &grouped_commands {
             if !group_name.is_empty() {
-                help.push_str(&format!("{}:\n", group_name));
+                help.push_str(&format!(
+                    "{}{}:{}\n",
+                    section_style.render(),
+                    group_name,
+                    reset
+                ));
             } else {
-                help.push_str("Commands:\n");
+                help.push_str(&format!("{}Commands:{}\n", section_style.render(), reset));
             }
 
             for (name, _full_name, desc) in commands {
                 if desc.is_empty() {
-                    help.push_str(&format!("  {}\n", name));
+                    help.push_str(&format!("  {}{}{}\n", cmd_style.render(), name, reset));
                 } else {
                     help.push_str(&format!(
-                        "  {:width$}  {}\n",
+                        "  {}{:width$}{}  {}{}{}\n",
+                        cmd_style.render(),
                         name,
+                        reset,
+                        dim_style.render(),
                         desc,
+                        reset,
                         width = global_max_len
                     ));
                 }
@@ -1368,19 +1425,47 @@ impl Router<()> {
         }
 
         // Options section
-        help.push_str("Options:\n");
-        help.push_str("  -h, --help            Print help\n");
+        help.push_str(&format!("{}Options:{}\n", section_style.render(), reset));
+        help.push_str(&format!(
+            "  {}-h{}, {}--help{}            Print help\n",
+            cmd_style.render(),
+            reset,
+            cmd_style.render(),
+            reset
+        ));
         if self.metadata.as_ref().and_then(|m| m.version).is_some() {
-            help.push_str("  -V, --version         Print version\n");
+            help.push_str(&format!(
+                "  {}-V{}, {}--version{}         Print version\n",
+                cmd_style.render(),
+                reset,
+                cmd_style.render(),
+                reset
+            ));
         }
         help.push('\n');
 
         // Alternative formats for automation
-        help.push_str("For AI/Agent:\n");
-        help.push_str("      --help --md       Print help in Markdown format\n");
+        help.push_str(&format!(
+            "{}For AI/Agent:{}\n",
+            section_style.render(),
+            reset
+        ));
+        help.push_str(&format!(
+            "      {}--help --md{}       Print help in Markdown format\n",
+            cmd_style.render(),
+            reset
+        ));
         help.push('\n');
-        help.push_str("For Programs:\n");
-        help.push_str("      --help --json     Print CLI schema in JSON format\n");
+        help.push_str(&format!(
+            "{}For Programs:{}\n",
+            section_style.render(),
+            reset
+        ));
+        help.push_str(&format!(
+            "      {}--help --json{}     Print CLI schema in JSON format\n",
+            cmd_style.render(),
+            reset
+        ));
 
         Response::text(help)
     }
