@@ -39,6 +39,9 @@ pub enum LoaderError {
 
     #[error("Fuel exhausted (CPU limit exceeded)")]
     FuelExhausted,
+
+    #[error("Store configuration failed: {0}")]
+    StoreConfig(String),
 }
 
 /// Plugin loader with wasmtime engine
@@ -94,7 +97,7 @@ impl PluginLoader {
         let mut store = Store::new(&self.engine, ());
         store
             .set_fuel(10_000_000)
-            .map_err(LoaderError::EngineCreation)?;
+            .map_err(|e| LoaderError::StoreConfig(format!("Failed to set fuel: {}", e)))?;
 
         // 3. Create linker (empty for now, no WASI imports)
         let linker = Linker::new(&self.engine);
@@ -124,7 +127,9 @@ impl PluginLoader {
             .map_err(|_| LoaderError::FunctionNotFound("plugin_manifest".to_string()))?;
 
         let packed = manifest_fn.call(&mut store, ()).map_err(|e| {
-            if e.to_string().contains("fuel") {
+            if e.downcast_ref::<Trap>()
+                .is_some_and(|t| *t == Trap::OutOfFuel)
+            {
                 LoaderError::FuelExhausted
             } else {
                 LoaderError::FunctionCall {
@@ -184,7 +189,10 @@ impl PluginLoader {
         len: usize,
     ) -> Result<Vec<u8>, LoaderError> {
         let data = memory.data(store);
-        if ptr + len > data.len() {
+        let end = ptr.checked_add(len).ok_or_else(|| {
+            LoaderError::MemoryAccess(format!("Integer overflow: ptr={}, len={}", ptr, len))
+        })?;
+        if end > data.len() {
             return Err(LoaderError::MemoryAccess(format!(
                 "Out of bounds: ptr={}, len={}, memory_size={}",
                 ptr,
@@ -192,7 +200,7 @@ impl PluginLoader {
                 data.len()
             )));
         }
-        Ok(data[ptr..ptr + len].to_vec())
+        Ok(data[ptr..end].to_vec())
     }
 }
 
@@ -215,7 +223,12 @@ impl PluginInstance {
             .map_err(|e| LoaderError::MemoryAccess(format!("Failed to serialize args: {}", e)))?;
 
         // 2. Allocate memory in guest
-        let args_len = args_bytes.len() as i32;
+        let args_len: i32 = args_bytes.len().try_into().map_err(|_| {
+            LoaderError::MemoryAccess(format!(
+                "Arguments too large: {} bytes exceeds i32::MAX",
+                args_bytes.len()
+            ))
+        })?;
         let args_ptr = self.alloc_fn.call(&mut self.store, args_len).map_err(|e| {
             LoaderError::FunctionCall {
                 function: "plugin_alloc",
@@ -237,12 +250,14 @@ impl PluginInstance {
         // Reset fuel for execution
         self.store
             .set_fuel(10_000_000)
-            .map_err(LoaderError::EngineCreation)?;
+            .map_err(|e| LoaderError::StoreConfig(format!("Failed to reset fuel: {}", e)))?;
 
         let packed = execute_fn
             .call(&mut self.store, (args_ptr, args_len))
             .map_err(|e| {
-                if e.to_string().contains("fuel") {
+                if e.downcast_ref::<Trap>()
+                    .is_some_and(|t| *t == Trap::OutOfFuel)
+                {
                     LoaderError::FuelExhausted
                 } else {
                     LoaderError::FunctionCall {

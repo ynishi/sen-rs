@@ -51,14 +51,25 @@ pub trait Plugin {
 }
 
 /// Memory utilities for Wasm plugin development
+///
+/// # Platform
+/// These functions are designed for **WASM32 targets only**.
+/// Pointer values are represented as `i32`, which is correct for WASM32's
+/// 32-bit linear memory address space. Do not use on 64-bit native targets.
 pub mod memory {
     use super::*;
 
     /// Allocate memory in the Wasm linear memory
     ///
+    /// # Platform
+    /// WASM32 only. Pointer is returned as `i32` (32-bit address).
+    ///
+    /// # Returns
+    /// - Pointer to allocated memory as `i32`
+    /// - `0` (null pointer) on allocation failure or invalid size
+    ///
     /// # Safety
     /// This function is safe to call from the host.
-    /// Returns 0 (null pointer) on allocation failure.
     #[inline]
     pub fn plugin_alloc(size: i32) -> i32 {
         if size <= 0 {
@@ -131,7 +142,43 @@ pub mod memory {
         pack_ptr_len(ptr, len)
     }
 
+    /// Error type for deserialization failures
+    #[derive(Debug)]
+    pub enum DeserializeError {
+        /// Null pointer or invalid length provided
+        InvalidPointer { ptr: i32, len: i32 },
+        /// MessagePack deserialization failed
+        DeserializeFailed(rmp_serde::decode::Error),
+    }
+
+    impl std::fmt::Display for DeserializeError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Self::InvalidPointer { ptr, len } => {
+                    write!(f, "invalid pointer/length: ptr={}, len={}", ptr, len)
+                }
+                Self::DeserializeFailed(e) => write!(f, "deserialization failed: {}", e),
+            }
+        }
+    }
+
+    impl std::error::Error for DeserializeError {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Self::DeserializeFailed(e) => Some(e),
+                _ => None,
+            }
+        }
+    }
+
     /// Deserialize data from a raw pointer and length
+    ///
+    /// # Platform
+    /// WASM32 only. Expects pointer as `i32` (32-bit address).
+    ///
+    /// # Errors
+    /// - `InvalidPointer` if ptr is 0 or len <= 0
+    /// - `DeserializeFailed` if MessagePack deserialization fails
     ///
     /// # Safety
     /// Caller must ensure:
@@ -142,13 +189,13 @@ pub mod memory {
     pub unsafe fn deserialize_from_ptr<T: serde::de::DeserializeOwned>(
         ptr: i32,
         len: i32,
-    ) -> Option<T> {
+    ) -> Result<T, DeserializeError> {
         if ptr == 0 || len <= 0 {
-            return None;
+            return Err(DeserializeError::InvalidPointer { ptr, len });
         }
         // SAFETY: Caller guarantees ptr is valid for len bytes (see function docs)
         let slice = std::slice::from_raw_parts(ptr as *const u8, len as usize);
-        rmp_serde::from_slice(slice).ok()
+        rmp_serde::from_slice(slice).map_err(DeserializeError::DeserializeFailed)
     }
 }
 
@@ -181,7 +228,15 @@ macro_rules! export_plugin {
         #[no_mangle]
         pub extern "C" fn plugin_execute(args_ptr: i32, args_len: i32) -> i64 {
             let args: Vec<String> = unsafe {
-                $crate::memory::deserialize_from_ptr(args_ptr, args_len).unwrap_or_default()
+                match $crate::memory::deserialize_from_ptr(args_ptr, args_len) {
+                    Ok(v) => v,
+                    Err(_e) => {
+                        // Return error result for invalid/corrupted arguments
+                        let result =
+                            $crate::ExecuteResult::system_error("Failed to deserialize arguments");
+                        return $crate::memory::serialize_and_return(&result);
+                    }
+                }
             };
             let result = <$plugin as $crate::Plugin>::execute(args);
             $crate::memory::serialize_and_return(&result)
