@@ -25,14 +25,15 @@
 //! wasm-cli hello World
 //! ```
 
-use sen_plugin_api::ExecuteResult;
-use sen_plugin_host::{HotReloadWatcher, PluginRegistry, WatcherConfig};
+use sen_plugin_api::{ExecuteResult, PluginManifest};
+use sen_plugin_host::{HotReloadWatcher, PluginRegistry, PluginScanner, WatcherConfig};
 use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Duration;
 
 const VERSION: &str = "0.1.0";
+const API_VERSION: u32 = 1;
 const DEFAULT_PLUGIN_DIR: &str = "plugins";
 
 #[tokio::main]
@@ -157,6 +158,10 @@ async fn run_command(registry: &PluginRegistry, args: &[String]) -> ExitCode {
             list_plugins(registry).await;
             ExitCode::SUCCESS
         }
+        "doctor" => {
+            run_doctor().await;
+            ExitCode::SUCCESS
+        }
         cmd => {
             // Try plugin command
             execute_plugin(registry, cmd, &args[1..]).await
@@ -174,6 +179,7 @@ async fn execute_command(registry: &PluginRegistry, args: &[String]) -> bool {
         "help" | "?" => print_help(registry).await,
         "version" => println!("wasm-cli v{}", VERSION),
         "plugins" | "list" => list_plugins(registry).await,
+        "doctor" => run_doctor().await,
         "reload" => {
             println!("Plugins are automatically reloaded when files change.");
             println!("Current plugins:");
@@ -193,6 +199,7 @@ async fn print_help(registry: &PluginRegistry) {
     println!("BUILT-IN COMMANDS:");
     println!("  help, ?           Show this help message");
     println!("  plugins, list     List loaded plugins");
+    println!("  doctor            Diagnose plugin files");
     println!("  version           Show version");
     println!("  quit, exit, q     Exit REPL mode");
     println!();
@@ -254,6 +261,18 @@ async fn execute_plugin(registry: &PluginRegistry, cmd: &str, args: &[String]) -
         return ExitCode::FAILURE;
     }
 
+    // Handle --help for plugin commands
+    if args
+        .first()
+        .map(|s| s == "--help" || s == "-h")
+        .unwrap_or(false)
+    {
+        if let Some(manifest) = registry.get_manifest(cmd).await {
+            print_plugin_help(&manifest);
+            return ExitCode::SUCCESS;
+        }
+    }
+
     match registry.execute(cmd, args).await {
         Ok(result) => match result {
             ExecuteResult::Success(output) => {
@@ -270,4 +289,269 @@ async fn execute_plugin(registry: &PluginRegistry, cmd: &str, args: &[String]) -
             ExitCode::FAILURE
         }
     }
+}
+
+/// Print help for a plugin command (clap-style)
+fn print_plugin_help(manifest: &PluginManifest) {
+    let cmd = &manifest.command;
+
+    // Header: name version - about
+    print!("{}", cmd.name);
+    if let Some(version) = &cmd.version {
+        print!(" {}", version);
+    }
+    println!();
+    println!("{}", cmd.about);
+    println!();
+
+    // Usage
+    print!("Usage: {}", cmd.name);
+    if !cmd.args.is_empty() {
+        print!(" [OPTIONS]");
+        for arg in &cmd.args {
+            if arg.long.is_none() && arg.short.is_none() {
+                // Positional argument
+                if arg.required {
+                    print!(" <{}>", arg.name.to_uppercase());
+                } else {
+                    print!(" [{}]", arg.name.to_uppercase());
+                }
+            }
+        }
+    }
+    println!();
+    println!();
+
+    // Arguments section (positional)
+    let positional: Vec<_> = cmd
+        .args
+        .iter()
+        .filter(|a| a.long.is_none() && a.short.is_none())
+        .collect();
+
+    if !positional.is_empty() {
+        println!("Arguments:");
+        for arg in &positional {
+            let mut line = format!("  {:<16}", arg.name);
+            if !arg.help.is_empty() {
+                line.push_str(&format!("  {}", arg.help));
+            }
+            if let Some(default) = &arg.default_value {
+                line.push_str(&format!(" [default: {}]", default));
+            }
+            println!("{}", line);
+        }
+        println!();
+    }
+
+    // Options section
+    let options: Vec<_> = cmd
+        .args
+        .iter()
+        .filter(|a| a.long.is_some() || a.short.is_some())
+        .collect();
+
+    println!("Options:");
+    for arg in &options {
+        let mut opt_str = String::new();
+        if let Some(short) = arg.short {
+            opt_str.push_str(&format!("-{}", short));
+            if arg.long.is_some() {
+                opt_str.push_str(", ");
+            }
+        } else {
+            opt_str.push_str("    ");
+        }
+        if let Some(long) = &arg.long {
+            opt_str.push_str(&format!("--{}", long));
+        }
+        if let Some(value_name) = &arg.value_name {
+            opt_str.push_str(&format!(" <{}>", value_name));
+        }
+
+        let mut line = format!("  {:<20}", opt_str);
+        if !arg.help.is_empty() {
+            line.push_str(&format!("  {}", arg.help));
+        }
+        if let Some(default) = &arg.default_value {
+            line.push_str(&format!(" [default: {}]", default));
+        }
+        println!("{}", line);
+    }
+    println!("  {:<20}  Print help", "-h, --help");
+}
+
+/// Run plugin diagnostics
+async fn run_doctor() {
+    let plugin_dir = PathBuf::from(DEFAULT_PLUGIN_DIR);
+
+    println!("Plugin Doctor");
+    println!("=============");
+    println!();
+    println!("Checking plugins in {}/ ...", plugin_dir.display());
+    println!();
+
+    if !plugin_dir.exists() {
+        println!("  (directory does not exist)");
+        println!();
+        println!("Create the plugins directory and add .wasm files.");
+        return;
+    }
+
+    // Get list of .wasm files
+    let wasm_files: Vec<_> = match std::fs::read_dir(&plugin_dir) {
+        Ok(entries) => entries
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                e.path()
+                    .extension()
+                    .map(|ext| ext == "wasm")
+                    .unwrap_or(false)
+            })
+            .collect(),
+        Err(e) => {
+            eprintln!("  Error reading directory: {}", e);
+            return;
+        }
+    };
+
+    if wasm_files.is_empty() {
+        println!("  (no .wasm files found)");
+        println!();
+        println!(
+            "Copy .wasm plugin files to {}/ to use them.",
+            plugin_dir.display()
+        );
+        return;
+    }
+
+    let scanner = match PluginScanner::new() {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("  Failed to create scanner: {}", e);
+            return;
+        }
+    };
+
+    let mut ok_count = 0;
+    let mut fail_count = 0;
+
+    for entry in wasm_files {
+        let path = entry.path();
+        let filename = path.file_name().unwrap_or_default().to_string_lossy();
+
+        // Check file size
+        let metadata = match std::fs::metadata(&path) {
+            Ok(m) => m,
+            Err(e) => {
+                println!("\u{2717} {}", filename);
+                println!("    Error: Cannot read file: {}", e);
+                println!();
+                fail_count += 1;
+                continue;
+            }
+        };
+        let size_kb = metadata.len() / 1024;
+
+        // Check WASM magic bytes
+        let bytes = match std::fs::read(&path) {
+            Ok(b) => b,
+            Err(e) => {
+                println!("\u{2717} {}", filename);
+                println!("    Error: Cannot read file: {}", e);
+                println!();
+                fail_count += 1;
+                continue;
+            }
+        };
+
+        if bytes.len() < 8 || &bytes[0..4] != b"\0asm" {
+            println!("\u{2717} {}", filename);
+            println!("    Error: Not a valid WASM file (bad magic bytes)");
+            println!("    Suggestion: Rebuild with correct WASM target");
+            println!();
+            fail_count += 1;
+            continue;
+        }
+
+        // Try to load as plugin
+        let result = scanner.scan_directory(&plugin_dir);
+        let plugin_result = match &result {
+            Ok(r) => r
+                .plugins
+                .iter()
+                .find(|p| {
+                    path.file_stem()
+                        .map(|s| s.to_string_lossy().contains(&p.manifest.command.name))
+                        .unwrap_or(false)
+                })
+                .map(|p| Ok(p.manifest.clone()))
+                .or_else(|| {
+                    r.failures
+                        .iter()
+                        .find(|(p, _)| p == &path)
+                        .map(|(_, e)| Err(e.to_string()))
+                }),
+            Err(e) => Some(Err(e.to_string())),
+        };
+
+        match plugin_result {
+            Some(Ok(manifest)) => {
+                println!("\u{2713} {} ({}KB)", filename, size_kb);
+                println!("    Command: {}", manifest.command.name);
+                println!(
+                    "    API: v{} {}",
+                    manifest.api_version,
+                    if manifest.api_version == API_VERSION {
+                        "(compatible)"
+                    } else {
+                        "(INCOMPATIBLE!)"
+                    }
+                );
+                if let Some(version) = &manifest.command.version {
+                    println!("    Version: {}", version);
+                }
+                if !manifest.command.args.is_empty() {
+                    let args: Vec<_> = manifest.command.args.iter().map(|a| &a.name).collect();
+                    println!(
+                        "    Args: [{}]",
+                        args.into_iter()
+                            .map(|s| s.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    );
+                }
+                println!();
+                ok_count += 1;
+            }
+            Some(Err(e)) => {
+                println!("\u{2717} {} ({}KB)", filename, size_kb);
+                println!("    Error: {}", e);
+
+                // Provide suggestions based on error
+                if e.contains("not found") {
+                    println!(
+                        "    Suggestion: Ensure plugin exports plugin_manifest and plugin_execute"
+                    );
+                } else if e.contains("version") {
+                    println!(
+                        "    Suggestion: Rebuild with sen-plugin-sdk {}.x",
+                        API_VERSION
+                    );
+                } else if e.contains("Deserialization") {
+                    println!("    Suggestion: Check manifest format matches sen-plugin-api");
+                }
+                println!();
+                fail_count += 1;
+            }
+            None => {
+                // File exists but wasn't processed - try direct load
+                println!("? {} ({}KB)", filename, size_kb);
+                println!("    Status: Unknown (scan did not process this file)");
+                println!();
+            }
+        }
+    }
+
+    println!("Summary: {} OK, {} failed", ok_count, fail_count);
 }
