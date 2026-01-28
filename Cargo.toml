@@ -5,6 +5,7 @@ members = [
     "sen-rs-macros",
     "sen-plugin-api",
     "sen-plugin-host",
+    "sen-plugin-sdk",
 ]
 exclude = [
     "examples/*",

@@ -7,6 +7,10 @@ const HELLO_PLUGIN_WASM: &[u8] = include_bytes!(
     "../../examples/hello-plugin/target/wasm32-unknown-unknown/release/hello_plugin.wasm"
 );
 
+const GREET_PLUGIN_WASM: &[u8] = include_bytes!(
+    "../../examples/greet-plugin/target/wasm32-unknown-unknown/release/greet_plugin.wasm"
+);
+
 #[test]
 fn test_load_hello_plugin() {
     let loader = PluginLoader::new().expect("Failed to create loader");
@@ -85,6 +89,45 @@ fn test_multiple_executions() {
             ExecuteResult::Error(e) => {
                 panic!("Unexpected error: {:?}", e);
             }
+        }
+    }
+}
+
+// Tests for SDK-based greet plugin
+#[test]
+fn test_load_greet_plugin_sdk() {
+    let loader = PluginLoader::new().expect("Failed to create loader");
+    let plugin = loader
+        .load(GREET_PLUGIN_WASM)
+        .expect("Failed to load plugin");
+
+    assert_eq!(plugin.manifest.command.name, "greet");
+    assert_eq!(
+        plugin.manifest.command.about,
+        "Greets a person with a custom message"
+    );
+    assert_eq!(plugin.manifest.command.args.len(), 2);
+}
+
+#[test]
+fn test_execute_greet_plugin_sdk() {
+    let loader = PluginLoader::new().expect("Failed to create loader");
+    let mut plugin = loader
+        .load(GREET_PLUGIN_WASM)
+        .expect("Failed to load plugin");
+
+    // Execute with custom name
+    let result = plugin
+        .instance
+        .execute(&["Rust".to_string()])
+        .expect("Execution failed");
+
+    match result {
+        ExecuteResult::Success(output) => {
+            assert_eq!(output, "Hello, Rust!");
+        }
+        ExecuteResult::Error(e) => {
+            panic!("Unexpected error: {:?}", e);
         }
     }
 }

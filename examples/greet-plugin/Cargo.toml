@@ -1,0 +1,19 @@
+[package]
+name = "greet-plugin"
+version = "0.1.0"
+edition = "2021"
+
+# Exclude from parent workspace
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+sen-plugin-sdk = { path = "../../sen-plugin-sdk" }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true

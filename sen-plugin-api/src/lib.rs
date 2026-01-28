@@ -99,6 +99,16 @@ pub struct PluginManifest {
     pub command: CommandSpec,
 }
 
+impl PluginManifest {
+    /// Create a new plugin manifest with current API version
+    pub fn new(command: CommandSpec) -> Self {
+        Self {
+            api_version: API_VERSION,
+            command,
+        }
+    }
+}
+
 impl ExecuteResult {
     /// Create a success result
     pub fn success(output: impl Into<String>) -> Self {

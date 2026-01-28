@@ -1,0 +1,12 @@
+[package]
+name = "sen-plugin-sdk"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "SDK for creating Wasm plugins with minimal boilerplate"
+
+[dependencies]
+sen-plugin-api = { path = "../sen-plugin-api" }
+rmp-serde = { workspace = true }
+serde = { workspace = true }
