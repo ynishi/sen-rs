@@ -94,7 +94,7 @@ impl PluginLoader {
         let mut store = Store::new(&self.engine, ());
         store
             .set_fuel(10_000_000)
-            .map_err(|e| LoaderError::EngineCreation(e.into()))?;
+            .map_err(LoaderError::EngineCreation)?;
 
         // 3. Create linker (empty for now, no WASI imports)
         let linker = Linker::new(&self.engine);
@@ -224,7 +224,7 @@ impl PluginInstance {
         // Reset fuel for execution
         self.store
             .set_fuel(10_000_000)
-            .map_err(|e| LoaderError::EngineCreation(e.into()))?;
+            .map_err(LoaderError::EngineCreation)?;
 
         let packed = execute_fn
             .call(&mut self.store, (args_ptr, args_len))
