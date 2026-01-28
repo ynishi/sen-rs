@@ -15,21 +15,38 @@ use tokio::sync::Mutex;
 pub struct WasmHandler {
     instance: Arc<Mutex<PluginInstance>>,
     command_name: String,
+    command_about: String,
 }
 
 impl WasmHandler {
     /// Create a new WasmHandler from a plugin instance
-    pub fn new(instance: PluginInstance, command_name: impl Into<String>) -> Self {
+    pub fn new(
+        instance: PluginInstance,
+        command_name: impl Into<String>,
+        command_about: impl Into<String>,
+    ) -> Self {
         Self {
             instance: Arc::new(Mutex::new(instance)),
             command_name: command_name.into(),
+            command_about: command_about.into(),
         }
     }
 
     /// Create from a loaded plugin
     pub fn from_loaded(plugin: LoadedPlugin) -> Self {
         let command_name = plugin.manifest.command.name.clone();
-        Self::new(plugin.instance, command_name)
+        let command_about = plugin.manifest.command.about.clone();
+        Self::new(plugin.instance, command_name, command_about)
+    }
+
+    /// Get the command name
+    pub fn command_name(&self) -> &str {
+        &self.command_name
+    }
+
+    /// Get the command description
+    pub fn command_about(&self) -> &str {
+        &self.command_about
     }
 }
 
@@ -52,8 +69,11 @@ where
     }
 
     fn metadata(&self) -> Option<HandlerMetadata> {
+        // Note: Using Box::leak here is necessary because HandlerMetadata requires &'static str.
+        // This is acceptable for long-lived plugin registrations.
+        let description = Box::leak(self.command_about.clone().into_boxed_str());
         Some(HandlerMetadata {
-            desc: Some(Box::leak(self.command_name.clone().into_boxed_str())),
+            desc: Some(description),
             tier: None,
             tags: None,
         })
@@ -138,7 +158,7 @@ pub fn generate_plugin_help(spec: &CommandSpec) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sen_plugin_api::{ArgSpec, PluginManifest, API_VERSION};
+    use sen_plugin_api::ArgSpec;
 
     #[test]
     fn test_generate_plugin_help() {

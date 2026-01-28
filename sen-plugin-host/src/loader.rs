@@ -129,7 +129,7 @@ impl PluginLoader {
             } else {
                 LoaderError::FunctionCall {
                     function: "plugin_manifest",
-                    source: e.into(),
+                    source: e,
                 }
             }
         })?;
@@ -154,7 +154,7 @@ impl PluginLoader {
             .call(&mut store, (ptr, len))
             .map_err(|e| LoaderError::FunctionCall {
                 function: "plugin_dealloc",
-                source: e.into(),
+                source: e,
             })?;
 
         Ok(LoadedPlugin {
@@ -206,7 +206,7 @@ impl PluginInstance {
         let args_ptr = self.alloc_fn.call(&mut self.store, args_len).map_err(|e| {
             LoaderError::FunctionCall {
                 function: "plugin_alloc",
-                source: e.into(),
+                source: e,
             }
         })?;
 
@@ -234,7 +234,7 @@ impl PluginInstance {
                 } else {
                     LoaderError::FunctionCall {
                         function: "plugin_execute",
-                        source: e.into(),
+                        source: e,
                     }
                 }
             })?;

@@ -8,9 +8,7 @@ const HELLO_PLUGIN_WASM: &[u8] = include_bytes!(
 );
 
 #[derive(Clone)]
-struct TestState {
-    name: String,
-}
+struct TestState;
 
 fn args(strs: &[&str]) -> Vec<String> {
     strs.iter().map(|s| s.to_string()).collect()
@@ -26,9 +24,7 @@ async fn test_router_plugin_integration() {
     // Verify manifest
     assert_eq!(plugin.manifest.command.name, "hello");
 
-    let state = TestState {
-        name: "Test".to_string(),
-    };
+    let state = TestState;
 
     // Register plugin with router
     let router = Router::new().plugin(plugin).with_state(state);
@@ -50,9 +46,7 @@ async fn test_router_plugin_with_prefix() {
         .load(HELLO_PLUGIN_WASM)
         .expect("Failed to load plugin");
 
-    let state = TestState {
-        name: "Test".to_string(),
-    };
+    let state = TestState;
 
     // Register plugin with prefix
     let router = Router::new()
@@ -83,9 +77,7 @@ async fn test_router_multiple_plugins() {
         .load(HELLO_PLUGIN_WASM)
         .expect("Failed to load plugin");
 
-    let state = TestState {
-        name: "Test".to_string(),
-    };
+    let state = TestState;
 
     let router = Router::new()
         .plugin_with_prefix("en", plugin1)
@@ -103,4 +95,41 @@ async fn test_router_multiple_plugins() {
         .execute_with(&args(&["test", "greeting:hello", "Bob"]))
         .await;
     assert_eq!(response2.exit_code, 0);
+}
+
+#[tokio::test]
+async fn test_plugin_help_integration() {
+    let loader = PluginLoader::new().expect("Failed to create loader");
+    let plugin = loader
+        .load(HELLO_PLUGIN_WASM)
+        .expect("Failed to load plugin");
+
+    // Verify the plugin has description
+    assert_eq!(plugin.manifest.command.about, "Says hello to the world");
+
+    let state = TestState;
+
+    // Register plugin with router
+    let router = Router::new().plugin(plugin).with_state(state);
+
+    // Request help
+    let response = router.execute_with(&args(&["test", "--help"])).await;
+
+    // Help should show plugin command with its description
+    assert_eq!(response.exit_code, 0);
+    match &response.output {
+        sen::Output::Text(help_text) => {
+            // Verify plugin command appears in help
+            assert!(
+                help_text.contains("hello"),
+                "Help should contain 'hello' command"
+            );
+            // Verify plugin description appears in help
+            assert!(
+                help_text.contains("Says hello to the world"),
+                "Help should contain plugin description"
+            );
+        }
+        _ => panic!("Expected text output for help"),
+    }
 }
