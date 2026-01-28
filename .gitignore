@@ -19,3 +19,5 @@ examples/wasm-cli/plugins/*.wasm
 Thumbs.db
 
 /workspace/
+
+.claude
