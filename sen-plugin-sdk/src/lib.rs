@@ -3,6 +3,32 @@
 //! This SDK provides utilities and helpers for creating Wasm plugins
 //! with minimal boilerplate.
 //!
+//! ## Setup
+//!
+//! Add to your `Cargo.toml`:
+//!
+//! ```toml
+//! [lib]
+//! crate-type = ["cdylib"]
+//!
+//! [dependencies]
+//! sen-plugin-sdk = { path = "path/to/sen-plugin-sdk" }
+//! ```
+//!
+//! ## Building
+//!
+//! Plugins must be compiled for `wasm32-unknown-unknown`:
+//!
+//! ```bash
+//! # Add target (one-time)
+//! rustup target add wasm32-unknown-unknown
+//!
+//! # Build plugin
+//! cargo build --release --target wasm32-unknown-unknown
+//!
+//! # Output: target/wasm32-unknown-unknown/release/your_plugin.wasm
+//! ```
+//!
 //! ## Quick Start
 //!
 //! ```rust,ignore
@@ -14,6 +40,7 @@
 //!     fn manifest() -> PluginManifest {
 //!         PluginManifest::new(
 //!             CommandSpec::new("greet", "Greets a person")
+//!                 .version("1.0.0")
 //!                 .arg(ArgSpec::positional("name").help("Name to greet"))
 //!         )
 //!     }
@@ -24,9 +51,25 @@
 //!     }
 //! }
 //!
-//! // Generate all required exports
+//! // Generate all required WASM exports
 //! export_plugin!(MyPlugin);
 //! ```
+//!
+//! ## Error Handling
+//!
+//! ```rust,ignore
+//! fn execute(args: Vec<String>) -> ExecuteResult {
+//!     if args.is_empty() {
+//!         return ExecuteResult::user_error("Missing required argument");
+//!     }
+//!     // ... process args
+//!     ExecuteResult::success("Done!")
+//! }
+//! ```
+//!
+//! ## Examples
+//!
+//! See `examples/hello-plugin/` and `examples/greet-plugin/` for complete examples.
 
 use std::alloc::{alloc, dealloc, Layout};
 
