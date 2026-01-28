@@ -54,7 +54,7 @@ impl PluginRegistry {
     /// Load and register a plugin from a file path
     pub async fn load_plugin(&self, path: impl AsRef<Path>) -> Result<String, LoaderError> {
         let path = path.as_ref();
-        let wasm_bytes = std::fs::read(path).map_err(|e| {
+        let wasm_bytes = tokio::fs::read(path).await.map_err(|e| {
             LoaderError::MemoryAccess(format!("Failed to read file {}: {}", path.display(), e))
         })?;
 
@@ -200,8 +200,13 @@ impl PluginRegistry {
 }
 
 impl Default for PluginRegistry {
+    /// Creates a new empty PluginRegistry with default settings.
+    ///
+    /// # Panics
+    /// Panics if the underlying PluginLoader fails to initialize.
+    /// Use `PluginRegistry::new()` for fallible construction.
     fn default() -> Self {
-        Self::new().expect("Failed to create PluginRegistry")
+        Self::new().expect("Failed to create PluginRegistry: loader initialization failed")
     }
 }
 

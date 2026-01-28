@@ -136,6 +136,14 @@ impl PluginLoader {
 
         let (ptr, len) = unpack_ptr_len(packed);
 
+        // Validate pointer and length are non-negative
+        if ptr < 0 || len < 0 {
+            return Err(LoaderError::MemoryAccess(format!(
+                "Invalid manifest pointer/length: ptr={}, len={}",
+                ptr, len
+            )));
+        }
+
         // 8. Read manifest from memory
         let manifest_bytes = Self::read_memory(&store, &memory, ptr as usize, len as usize)?;
         let manifest: PluginManifest =
@@ -189,8 +197,13 @@ impl PluginLoader {
 }
 
 impl Default for PluginLoader {
+    /// Creates a new PluginLoader with default settings.
+    ///
+    /// # Panics
+    /// Panics if wasmtime engine creation fails. Use `PluginLoader::new()` for
+    /// fallible construction.
     fn default() -> Self {
-        Self::new().expect("Failed to create PluginLoader")
+        Self::new().expect("Failed to create PluginLoader: wasmtime engine initialization failed")
     }
 }
 
@@ -241,6 +254,14 @@ impl PluginInstance {
 
         let (result_ptr, result_len) = unpack_ptr_len(packed);
 
+        // Validate result pointer and length are non-negative
+        if result_ptr < 0 || result_len < 0 {
+            return Err(LoaderError::MemoryAccess(format!(
+                "Invalid result pointer/length: ptr={}, len={}",
+                result_ptr, result_len
+            )));
+        }
+
         // 5. Read result from memory
         let result_bytes = PluginLoader::read_memory(
             &self.store,
@@ -253,12 +274,15 @@ impl PluginInstance {
             rmp_serde::from_slice(&result_bytes).map_err(LoaderError::Deserialization)?;
 
         // 6. Deallocate args and result memory
-        self.dealloc_fn
-            .call(&mut self.store, (args_ptr, args_len))
-            .ok();
-        self.dealloc_fn
+        if let Err(e) = self.dealloc_fn.call(&mut self.store, (args_ptr, args_len)) {
+            tracing::warn!(error = %e, ptr = args_ptr, len = args_len, "Failed to deallocate args memory in plugin");
+        }
+        if let Err(e) = self
+            .dealloc_fn
             .call(&mut self.store, (result_ptr, result_len))
-            .ok();
+        {
+            tracing::warn!(error = %e, ptr = result_ptr, len = result_len, "Failed to deallocate result memory in plugin");
+        }
 
         Ok(result)
     }

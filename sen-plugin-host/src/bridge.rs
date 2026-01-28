@@ -15,20 +15,27 @@ use tokio::sync::Mutex;
 pub struct WasmHandler {
     instance: Arc<Mutex<PluginInstance>>,
     command_name: String,
-    command_about: String,
+    /// Leaked once at construction time to satisfy HandlerMetadata's 'static requirement
+    command_about: &'static str,
 }
 
 impl WasmHandler {
     /// Create a new WasmHandler from a plugin instance
+    ///
+    /// Note: `command_about` is leaked once to satisfy HandlerMetadata's 'static requirement.
+    /// This is acceptable for long-lived plugin registrations.
     pub fn new(
         instance: PluginInstance,
         command_name: impl Into<String>,
         command_about: impl Into<String>,
     ) -> Self {
+        // Leak the description once at construction time instead of on every metadata() call
+        let about: String = command_about.into();
+        let leaked_about: &'static str = Box::leak(about.into_boxed_str());
         Self {
             instance: Arc::new(Mutex::new(instance)),
             command_name: command_name.into(),
-            command_about: command_about.into(),
+            command_about: leaked_about,
         }
     }
 
@@ -45,8 +52,8 @@ impl WasmHandler {
     }
 
     /// Get the command description
-    pub fn command_about(&self) -> &str {
-        &self.command_about
+    pub fn command_about(&self) -> &'static str {
+        self.command_about
     }
 }
 
@@ -69,11 +76,9 @@ where
     }
 
     fn metadata(&self) -> Option<HandlerMetadata> {
-        // Note: Using Box::leak here is necessary because HandlerMetadata requires &'static str.
-        // This is acceptable for long-lived plugin registrations.
-        let description = Box::leak(self.command_about.clone().into_boxed_str());
+        // command_about is already leaked at construction time
         Some(HandlerMetadata {
-            desc: Some(description),
+            desc: Some(self.command_about),
             tier: None,
             tags: None,
         })

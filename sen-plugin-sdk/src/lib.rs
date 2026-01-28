@@ -58,12 +58,22 @@ pub mod memory {
     ///
     /// # Safety
     /// This function is safe to call from the host.
+    /// Returns 0 (null pointer) on allocation failure.
     #[inline]
     pub fn plugin_alloc(size: i32) -> i32 {
         if size <= 0 {
             return 0;
         }
-        let layout = Layout::from_size_align(size as usize, 1).unwrap();
+        // Safe: size > 0 is checked above, and positive i32 always fits in usize
+        let size_usize = size as usize;
+        let layout = match Layout::from_size_align(size_usize, 1) {
+            Ok(l) => l,
+            Err(_) => return 0, // Invalid layout, return null pointer
+        };
+        // SAFETY:
+        // 1. Layout is valid (checked above with from_size_align)
+        // 2. Layout has non-zero size (size > 0 checked above)
+        // 3. The returned pointer will be properly aligned (alignment = 1)
         unsafe { alloc(layout) as i32 }
     }
 
@@ -76,7 +86,17 @@ pub mod memory {
         if ptr == 0 || size <= 0 {
             return;
         }
-        let layout = Layout::from_size_align(size as usize, 1).unwrap();
+        // Safe: size > 0 is checked above
+        let size_usize = size as usize;
+        let layout = match Layout::from_size_align(size_usize, 1) {
+            Ok(l) => l,
+            Err(_) => return, // Invalid layout, skip deallocation
+        };
+        // SAFETY:
+        // 1. ptr was allocated by plugin_alloc with the same layout (caller's responsibility)
+        // 2. ptr is non-null (checked above: ptr == 0 returns early)
+        // 3. Layout matches the allocation (same size, alignment = 1)
+        // 4. The memory block has not been deallocated yet (caller's responsibility)
         unsafe { dealloc(ptr as *mut u8, layout) }
     }
 
@@ -98,6 +118,11 @@ pub mod memory {
         let ptr = plugin_alloc(len);
 
         if ptr != 0 && len > 0 {
+            // SAFETY:
+            // 1. src (bytes.as_ptr()) is valid for reads of len bytes
+            // 2. dst (ptr) is valid for writes of len bytes (allocated by plugin_alloc)
+            // 3. Both pointers are properly aligned (alignment = 1 for u8)
+            // 4. Memory regions do not overlap (src is stack/heap, dst is Wasm linear memory)
             unsafe {
                 std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr as *mut u8, len as usize);
             }
@@ -109,7 +134,11 @@ pub mod memory {
     /// Deserialize data from a raw pointer and length
     ///
     /// # Safety
-    /// The pointer must be valid and point to `len` bytes of valid MessagePack data.
+    /// Caller must ensure:
+    /// 1. `ptr` points to a valid memory region in Wasm linear memory
+    /// 2. The memory region is at least `len` bytes
+    /// 3. The memory contains valid MessagePack data
+    /// 4. The memory will not be modified during deserialization
     pub unsafe fn deserialize_from_ptr<T: serde::de::DeserializeOwned>(
         ptr: i32,
         len: i32,
@@ -117,6 +146,7 @@ pub mod memory {
         if ptr == 0 || len <= 0 {
             return None;
         }
+        // SAFETY: Caller guarantees ptr is valid for len bytes (see function docs)
         let slice = std::slice::from_raw_parts(ptr as *const u8, len as usize);
         rmp_serde::from_slice(slice).ok()
     }
