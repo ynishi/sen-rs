@@ -9,13 +9,26 @@ pub fn build(b: *std.Build) void {
 
     const optimize = b.standardOptimizeOption(.{});
 
+    // Create SDK module
+    const sdk_module = b.createModule(.{
+        .root_source_file = b.path("sdk/plugin.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    // Create main module with SDK dependency
+    const main_module = b.createModule(.{
+        .root_source_file = b.path("src/main.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "sdk", .module = sdk_module },
+        },
+    });
+
     const exe = b.addExecutable(.{
         .name = "echo_plugin",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/main.zig"),
-            .target = target,
-            .optimize = optimize,
-        }),
+        .root_module = main_module,
     });
 
     // Export as dynamic library (WASM)
