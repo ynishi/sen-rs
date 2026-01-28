@@ -147,17 +147,6 @@ impl PluginScanner {
     }
 }
 
-impl Default for PluginScanner {
-    /// Creates a new PluginScanner with default settings.
-    ///
-    /// # Panics
-    /// Panics if the underlying PluginLoader fails to initialize.
-    /// Use `PluginScanner::new()` for fallible construction.
-    fn default() -> Self {
-        Self::new().expect("Failed to create PluginScanner: loader initialization failed")
-    }
-}
-
 /// Get default plugin directories for the current platform
 pub fn default_plugin_dirs(app_name: &str) -> Vec<PathBuf> {
     let mut dirs = Vec::new();

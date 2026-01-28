@@ -76,10 +76,22 @@ fn unpack_ptr_len(packed: i64) -> (i32, i32) {
 }
 
 impl PluginLoader {
-    /// Create a new plugin loader
+    /// Create a new plugin loader with security settings
+    ///
+    /// Configures:
+    /// - Fuel limits (CPU usage) - 10M instructions per execution
+    /// - Stack limits - 1MB maximum WASM stack
+    /// - Memory64 disabled for wasm32 compatibility
     pub fn new() -> Result<Self, LoaderError> {
         let mut config = Config::new();
+
+        // Security: Enable fuel for CPU limiting
         config.consume_fuel(true);
+
+        // Security: Limit WASM stack size (1MB) to prevent stack overflow
+        config.max_wasm_stack(1024 * 1024);
+
+        // Disable memory64 for wasm32 compatibility
         config.wasm_memory64(false);
 
         let engine = Engine::new(&config).map_err(LoaderError::EngineCreation)?;
@@ -201,17 +213,6 @@ impl PluginLoader {
             )));
         }
         Ok(data[ptr..end].to_vec())
-    }
-}
-
-impl Default for PluginLoader {
-    /// Creates a new PluginLoader with default settings.
-    ///
-    /// # Panics
-    /// Panics if wasmtime engine creation fails. Use `PluginLoader::new()` for
-    /// fallible construction.
-    fn default() -> Self {
-        Self::new().expect("Failed to create PluginLoader: wasmtime engine initialization failed")
     }
 }
 

@@ -199,17 +199,6 @@ impl PluginRegistry {
     }
 }
 
-impl Default for PluginRegistry {
-    /// Creates a new empty PluginRegistry with default settings.
-    ///
-    /// # Panics
-    /// Panics if the underlying PluginLoader fails to initialize.
-    /// Use `PluginRegistry::new()` for fallible construction.
-    fn default() -> Self {
-        Self::new().expect("Failed to create PluginRegistry: loader initialization failed")
-    }
-}
-
 /// Errors that can occur during registry operations
 #[derive(Debug, thiserror::Error)]
 pub enum RegistryError {

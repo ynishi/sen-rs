@@ -166,9 +166,19 @@ pub mod memory {
     /// Serialize data and return it as an allocated buffer
     ///
     /// Returns a packed i64 containing the pointer and length.
+    /// Returns (0, 0) on serialization failure or if data exceeds i32::MAX bytes.
     pub fn serialize_and_return<T: serde::Serialize>(data: &T) -> i64 {
-        let bytes = rmp_serde::to_vec(data).unwrap_or_default();
-        let len = bytes.len() as i32;
+        let bytes = match rmp_serde::to_vec(data) {
+            Ok(b) => b,
+            Err(_) => return pack_ptr_len(0, 0),
+        };
+
+        // Check for integer overflow before casting
+        let len: i32 = match bytes.len().try_into() {
+            Ok(l) => l,
+            Err(_) => return pack_ptr_len(0, 0), // Data too large for i32
+        };
+
         let ptr = plugin_alloc(len);
 
         if ptr != 0 && len > 0 {

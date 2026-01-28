@@ -1,4 +1,8 @@
 //! Integration tests for plugin-router bridge
+//!
+//! These tests require the `sen-integration` feature to be enabled.
+
+#![cfg(feature = "sen-integration")]
 
 use sen::Router;
 use sen_plugin_host::{PluginLoader, RouterPluginExt};

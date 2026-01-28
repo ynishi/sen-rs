@@ -11,11 +11,23 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 /// A handler that wraps a Wasm plugin instance
+///
+/// # Memory Note
+///
+/// The `command_about` field uses `Box::leak` to satisfy `HandlerMetadata`'s `'static`
+/// lifetime requirement. This is a deliberate trade-off:
+/// - PRO: Simple, zero-cost access to the description string
+/// - CON: Memory is not reclaimed when the handler is dropped
+///
+/// For typical CLI applications where plugins are loaded once and used throughout
+/// the program lifetime, this is acceptable. For applications that frequently
+/// load/unload plugins, consider using a different integration approach.
 #[derive(Clone)]
 pub struct WasmHandler {
     instance: Arc<Mutex<PluginInstance>>,
     command_name: String,
-    /// Leaked once at construction time to satisfy HandlerMetadata's 'static requirement
+    /// Leaked at construction time to satisfy HandlerMetadata's 'static requirement.
+    /// See struct-level documentation for trade-offs.
     command_about: &'static str,
 }
 
