@@ -7,6 +7,6 @@ repository.workspace = true
 description = "SDK for creating Wasm plugins with minimal boilerplate"
 
 [dependencies]
-sen-plugin-api = { path = "../sen-plugin-api", version = "0.7.0" }
+sen-plugin-api = { path = "../sen-plugin-api", version = "0.8.0" }
 rmp-serde = { workspace = true }
 serde = { workspace = true }
