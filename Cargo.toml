@@ -3,6 +3,8 @@ resolver = "2"
 members = [
     "sen-rs",
     "sen-rs-macros",
+    "sen-plugin-api",
+    "sen-plugin-host",
 ]
 exclude = [
     "examples/*",
@@ -19,3 +21,13 @@ repository = "https://github.com/ynishi/sen-rs"
 syn = { version = "2.0", features = ["full"] }
 quote = "1.0"
 proc-macro2 = "1.0"
+
+# Plugin system dependencies
+wasmtime = { version = "29.0" }
+wasmtime-wasi = { version = "29.0" }
+rmp-serde = { version = "1.3" }
+serde = { version = "1.0", features = ["derive"] }
+thiserror = { version = "2.0" }
+async-trait = { version = "0.1" }
+tokio = { version = "1.42", features = ["full"] }
+anyhow = { version = "1.0" }

@@ -1,0 +1,11 @@
+[package]
+name = "sen-plugin-api"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "WIT-generated API types for sen-rs plugin system"
+
+[dependencies]
+serde = { workspace = true }
+rmp-serde = { workspace = true }
