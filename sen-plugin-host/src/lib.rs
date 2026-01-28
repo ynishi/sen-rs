@@ -9,22 +9,28 @@
 //! ## Example
 //!
 //! ```rust,ignore
-//! use sen_plugin_host::{PluginLoader, RouterPluginExt};
+//! use sen_plugin_host::{PluginLoader, PluginScanner, RouterPluginExt};
 //! use sen::Router;
 //!
-//! let loader = PluginLoader::new()?;
-//! let plugin = loader.load(&wasm_bytes)?;
+//! // Scan directory for plugins
+//! let scanner = PluginScanner::new()?;
+//! let result = scanner.scan_directory("./plugins")?;
 //!
-//! let router = Router::new()
-//!     .plugin(plugin)  // Register plugin as route
-//!     .with_state(state);
+//! // Register all discovered plugins
+//! let mut router = Router::new();
+//! for plugin in result.plugins {
+//!     router = router.plugin(plugin);
+//! }
+//! let router = router.with_state(state);
 //! ```
 
+pub mod discovery;
 pub mod loader;
 
 #[cfg(feature = "sen-integration")]
 pub mod bridge;
 
+pub use discovery::{default_plugin_dirs, DiscoveryError, DiscoveryResult, PluginScanner};
 pub use loader::{LoadedPlugin, LoaderError, PluginInstance, PluginLoader};
 pub use sen_plugin_api::{ArgSpec, CommandSpec, ExecuteError, ExecuteResult, PluginManifest};
 
