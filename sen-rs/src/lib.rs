@@ -1370,11 +1370,17 @@ impl Router<()> {
         // Options section
         help.push_str("Options:\n");
         help.push_str("  -h, --help            Print help\n");
-        help.push_str("      --help --md       Print help (Markdown format)\n");
-        help.push_str("      --help --json     Print CLI schema (JSON format)\n");
         if self.metadata.as_ref().and_then(|m| m.version).is_some() {
             help.push_str("  -V, --version         Print version\n");
         }
+        help.push('\n');
+
+        // Alternative formats for automation
+        help.push_str("For AI/Agent:\n");
+        help.push_str("      --help --md       Print help in Markdown format\n");
+        help.push('\n');
+        help.push_str("For Programs:\n");
+        help.push_str("      --help --json     Print CLI schema in JSON format\n");
 
         Response::text(help)
     }
