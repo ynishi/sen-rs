@@ -1,0 +1,17 @@
+[package]
+name = "wasm-cli"
+version = "0.1.0"
+edition = "2021"
+description = "Example CLI that loads and executes WASM plugins"
+
+# Standalone package (not part of parent workspace)
+[workspace]
+
+[[bin]]
+name = "wasm-cli"
+path = "src/main.rs"
+
+[dependencies]
+sen-plugin-host = { path = "../../sen-plugin-host" }
+sen-plugin-api = { path = "../../sen-plugin-api" }
+tokio = { version = "1", features = ["full"] }
