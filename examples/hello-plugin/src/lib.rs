@@ -32,16 +32,15 @@ pub extern "C" fn plugin_dealloc(ptr: i32, size: i32) {
 /// Returns packed i64: (ptr << 32) | len
 #[no_mangle]
 pub extern "C" fn plugin_manifest() -> i64 {
-    let manifest = PluginManifest {
-        api_version: API_VERSION,
-        command: CommandSpec::new("hello", "Says hello to the world")
+    let manifest = PluginManifest::new(
+        CommandSpec::new("hello", "Says hello to the world")
             .version("1.0.0")
             .arg(
                 ArgSpec::positional("name")
                     .help("Name to greet")
                     .default("World"),
             ),
-    };
+    );
 
     serialize_to_memory(&manifest)
 }

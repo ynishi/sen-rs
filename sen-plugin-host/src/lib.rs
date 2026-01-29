@@ -194,8 +194,10 @@
 //! See `examples/wasm-cli/` for a complete example of a plugin-extensible CLI
 //! with hot reload support.
 
+pub mod audit;
 pub mod discovery;
 pub mod loader;
+pub mod permission;
 pub mod registry;
 pub mod watcher;
 
@@ -205,8 +207,14 @@ pub mod bridge;
 pub use discovery::{default_plugin_dirs, DiscoveryError, DiscoveryResult, PluginScanner};
 pub use loader::{LoadedPlugin, LoaderError, PluginInstance, PluginLoader};
 pub use registry::{PluginRegistry, RegistryError};
-pub use sen_plugin_api::{ArgSpec, CommandSpec, ExecuteError, ExecuteResult, PluginManifest};
+pub use sen_plugin_api::{
+    ArgSpec, Capabilities, CommandSpec, ExecuteError, ExecuteResult, NetPattern, PathPattern,
+    PluginManifest, StdioCapability,
+};
 pub use watcher::{HotReloadWatcher, WatcherConfig, WatcherError};
+
+// Permission system re-exports
+pub use permission::{PermissionConfig, PermissionConfigBuilder, PermissionPresets};
 
 #[cfg(feature = "sen-integration")]
 pub use bridge::{generate_plugin_help, register_plugins_from_spec, RouterPluginExt, WasmHandler};
