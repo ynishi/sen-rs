@@ -2,7 +2,7 @@
 //!
 //! Loads Wasm plugins and provides safe execution with sandboxing.
 
-use sen_plugin_api::{ExecuteResult, PluginManifest, API_VERSION};
+use sen_plugin_api::{Effect, EffectResult, ExecuteResult, PluginManifest, API_VERSION};
 use thiserror::Error;
 use wasmtime::*;
 
@@ -302,6 +302,127 @@ impl PluginInstance {
 
         Ok(result)
     }
+
+    /// Resume plugin execution after an effect completes
+    ///
+    /// Called by the host when an effect (HTTP request, sleep, etc.) completes.
+    /// Passes the result back to the plugin to continue execution.
+    ///
+    /// # Arguments
+    /// * `effect_id` - The ID of the completed effect
+    /// * `result` - The result of the effect
+    pub fn resume(
+        &mut self,
+        effect_id: u32,
+        result: &EffectResult,
+    ) -> Result<ExecuteResult, LoaderError> {
+        // 1. Serialize effect result
+        let result_bytes = rmp_serde::to_vec_named(result).map_err(|e| {
+            LoaderError::MemoryAccess(format!("Failed to serialize effect result: {}", e))
+        })?;
+
+        // 2. Allocate memory in guest
+        let result_len: i32 = result_bytes.len().try_into().map_err(|_| {
+            LoaderError::MemoryAccess(format!(
+                "Effect result too large: {} bytes exceeds i32::MAX",
+                result_bytes.len()
+            ))
+        })?;
+        let result_ptr = self
+            .alloc_fn
+            .call(&mut self.store, result_len)
+            .map_err(|e| LoaderError::FunctionCall {
+                function: "plugin_alloc",
+                source: e,
+            })?;
+
+        // 3. Write result to guest memory
+        self.memory
+            .write(&mut self.store, result_ptr as usize, &result_bytes)
+            .map_err(|e| {
+                LoaderError::MemoryAccess(format!("Failed to write effect result: {}", e))
+            })?;
+
+        // 4. Call resume function (returns packed i64)
+        let resume_fn = self
+            .instance
+            .get_typed_func::<(u32, i32, i32), i64>(&mut self.store, "plugin_resume")
+            .map_err(|_| LoaderError::FunctionNotFound("plugin_resume".to_string()))?;
+
+        // Reset fuel for execution
+        self.store
+            .set_fuel(10_000_000)
+            .map_err(|e| LoaderError::StoreConfig(format!("Failed to reset fuel: {}", e)))?;
+
+        let packed = resume_fn
+            .call(&mut self.store, (effect_id, result_ptr, result_len))
+            .map_err(|e| {
+                if e.downcast_ref::<Trap>()
+                    .is_some_and(|t| *t == Trap::OutOfFuel)
+                {
+                    LoaderError::FuelExhausted
+                } else {
+                    LoaderError::FunctionCall {
+                        function: "plugin_resume",
+                        source: e,
+                    }
+                }
+            })?;
+
+        let (exec_result_ptr, exec_result_len) = unpack_ptr_len(packed);
+
+        // Validate result pointer and length are non-negative
+        if exec_result_ptr < 0 || exec_result_len < 0 {
+            return Err(LoaderError::MemoryAccess(format!(
+                "Invalid result pointer/length: ptr={}, len={}",
+                exec_result_ptr, exec_result_len
+            )));
+        }
+
+        // 5. Read result from memory
+        let exec_result_bytes = PluginLoader::read_memory(
+            &self.store,
+            &self.memory,
+            exec_result_ptr as usize,
+            exec_result_len as usize,
+        )?;
+
+        let exec_result: ExecuteResult =
+            rmp_serde::from_slice(&exec_result_bytes).map_err(LoaderError::Deserialization)?;
+
+        // 6. Deallocate memory
+        if let Err(e) = self
+            .dealloc_fn
+            .call(&mut self.store, (result_ptr, result_len))
+        {
+            tracing::warn!(error = %e, ptr = result_ptr, len = result_len, "Failed to deallocate effect result memory");
+        }
+        if let Err(e) = self
+            .dealloc_fn
+            .call(&mut self.store, (exec_result_ptr, exec_result_len))
+        {
+            tracing::warn!(error = %e, ptr = exec_result_ptr, len = exec_result_len, "Failed to deallocate resume result memory");
+        }
+
+        Ok(exec_result)
+    }
+
+    /// Check if plugin supports effects (has plugin_resume function)
+    pub fn supports_effects(&mut self) -> bool {
+        self.instance
+            .get_typed_func::<(u32, i32, i32), i64>(&mut self.store, "plugin_resume")
+            .is_ok()
+    }
+}
+
+/// Effect handler trait for processing plugin effects
+///
+/// Implement this trait to handle effects from plugins.
+/// The host calls this handler when a plugin yields an effect.
+#[async_trait::async_trait]
+pub trait EffectHandler: Send + Sync {
+    /// Handle an effect and return the result
+    async fn handle(&self, effect: Effect) -> EffectResult;
 }
 
 #[cfg(test)]

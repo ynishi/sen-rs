@@ -411,7 +411,8 @@ pub use sen_plugin_api::*;
 pub mod prelude {
     pub use crate::{export_plugin, memory, Plugin};
     pub use sen_plugin_api::{
-        ArgSpec, CommandSpec, ExecuteError, ExecuteResult, PluginManifest, API_VERSION,
+        ArgSpec, Capabilities, CommandSpec, Effect, EffectResult, ExecuteError, ExecuteResult,
+        HttpResponse, NetPattern, PathPattern, PluginManifest, StdioCapability, API_VERSION,
     };
 }
 
@@ -422,6 +423,38 @@ pub trait Plugin {
 
     /// Executes the plugin with the given arguments
     fn execute(args: Vec<String>) -> ExecuteResult;
+
+    /// Resume execution after an effect completes
+    ///
+    /// Called by the host when an effect (HTTP request, sleep, etc.) completes.
+    /// The plugin should continue its work with the effect result.
+    ///
+    /// Default implementation returns an error - override if using effects.
+    ///
+    /// # Arguments
+    /// * `effect_id` - The ID of the completed effect
+    /// * `result` - The result of the effect
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// fn resume(effect_id: u32, result: EffectResult) -> ExecuteResult {
+    ///     match result {
+    ///         EffectResult::Http(response) => {
+    ///             if response.is_success() {
+    ///                 ExecuteResult::success(response.body)
+    ///             } else {
+    ///                 ExecuteResult::user_error(format!("HTTP {}", response.status))
+    ///             }
+    ///         }
+    ///         EffectResult::Error(e) => ExecuteResult::user_error(e),
+    ///         _ => ExecuteResult::system_error("Unexpected effect result"),
+    ///     }
+    /// }
+    /// ```
+    fn resume(_effect_id: u32, _result: EffectResult) -> ExecuteResult {
+        ExecuteResult::system_error("Plugin does not support effects")
+    }
 }
 
 /// Memory utilities for Wasm plugin development
@@ -588,8 +621,8 @@ pub mod memory {
 
 /// Macro to export all required plugin functions
 ///
-/// This macro generates the `plugin_manifest`, `plugin_execute`, `plugin_alloc`,
-/// and `plugin_dealloc` functions required by the host.
+/// This macro generates the `plugin_manifest`, `plugin_execute`, `plugin_resume`,
+/// `plugin_alloc`, and `plugin_dealloc` functions required by the host.
 ///
 /// # Example
 ///
@@ -602,6 +635,23 @@ pub mod memory {
 /// }
 ///
 /// export_plugin!(MyPlugin);
+/// ```
+///
+/// # Effects (Optional)
+///
+/// For plugins that use effects (HTTP, sleep, etc.), implement `resume`:
+///
+/// ```rust,ignore
+/// impl Plugin for MyPlugin {
+///     // ...
+///     fn resume(effect_id: u32, result: EffectResult) -> ExecuteResult {
+///         match result {
+///             EffectResult::Http(resp) => ExecuteResult::success(resp.body),
+///             EffectResult::Error(e) => ExecuteResult::user_error(e),
+///             _ => ExecuteResult::system_error("Unexpected result"),
+///         }
+///     }
+/// }
 /// ```
 #[macro_export]
 macro_rules! export_plugin {
@@ -626,6 +676,29 @@ macro_rules! export_plugin {
                 }
             };
             let result = <$plugin as $crate::Plugin>::execute(args);
+            $crate::memory::serialize_and_return(&result)
+        }
+
+        /// Resume execution after an effect completes
+        ///
+        /// # Arguments
+        /// * `effect_id` - The ID of the completed effect
+        /// * `result_ptr` - Pointer to serialized EffectResult
+        /// * `result_len` - Length of serialized data
+        #[no_mangle]
+        pub extern "C" fn plugin_resume(effect_id: u32, result_ptr: i32, result_len: i32) -> i64 {
+            let effect_result: $crate::EffectResult = unsafe {
+                match $crate::memory::deserialize_from_ptr(result_ptr, result_len) {
+                    Ok(v) => v,
+                    Err(_e) => {
+                        let result = $crate::ExecuteResult::system_error(
+                            "Failed to deserialize effect result",
+                        );
+                        return $crate::memory::serialize_and_return(&result);
+                    }
+                }
+            };
+            let result = <$plugin as $crate::Plugin>::resume(effect_id, effect_result);
             $crate::memory::serialize_and_return(&result)
         }
 

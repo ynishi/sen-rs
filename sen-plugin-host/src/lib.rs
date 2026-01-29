@@ -208,11 +208,11 @@ pub mod wasi;
 pub mod bridge;
 
 pub use discovery::{default_plugin_dirs, DiscoveryError, DiscoveryResult, PluginScanner};
-pub use loader::{LoadedPlugin, LoaderError, PluginInstance, PluginLoader};
+pub use loader::{EffectHandler, LoadedPlugin, LoaderError, PluginInstance, PluginLoader};
 pub use registry::{PluginRegistry, RegistryError};
 pub use sen_plugin_api::{
-    ArgSpec, Capabilities, CommandSpec, ExecuteError, ExecuteResult, NetPattern, PathPattern,
-    PluginManifest, StdioCapability,
+    ArgSpec, Capabilities, CommandSpec, Effect, EffectResult, ExecuteError, ExecuteResult,
+    HttpResponse, NetPattern, PathPattern, PluginManifest, StdioCapability,
 };
 pub use watcher::{HotReloadWatcher, WatcherConfig, WatcherError};
 

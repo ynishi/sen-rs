@@ -106,6 +106,9 @@ fn test_wasi_plugin_read_file() {
         ExecuteResult::Error(e) => {
             panic!("Plugin execution failed: {}", e.message);
         }
+        ExecuteResult::Effect(e) => {
+            panic!("Unexpected effect: {:?}", e);
+        }
     }
 }
 
@@ -136,6 +139,9 @@ fn test_wasi_plugin_file_not_found() {
         }
         ExecuteResult::Success(_) => {
             panic!("Expected error for non-existent file");
+        }
+        ExecuteResult::Effect(e) => {
+            panic!("Unexpected effect: {:?}", e);
         }
     }
 }
@@ -214,6 +220,9 @@ fn test_zig_wasi_plugin_read_env() {
         }
         ExecuteResult::Error(e) => {
             panic!("Zig plugin execution failed: {}", e.message);
+        }
+        ExecuteResult::Effect(e) => {
+            panic!("Unexpected effect: {:?}", e);
         }
     }
 }

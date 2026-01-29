@@ -428,6 +428,12 @@ pub enum ExecuteResult {
 
     /// Execution failed
     Error(ExecuteError),
+
+    /// Request host to perform an effect (async I/O)
+    ///
+    /// The plugin yields control to the host, which performs the
+    /// requested operation and calls `plugin_resume` with the result.
+    Effect(Effect),
 }
 
 /// Error details from plugin execution
@@ -438,6 +444,148 @@ pub struct ExecuteError {
 
     /// Error message
     pub message: String,
+}
+
+// =============================================================================
+// Effect System (Host-side async I/O)
+// =============================================================================
+
+/// Effect request from plugin to host
+///
+/// Plugins cannot perform I/O directly (sandboxed), so they request
+/// the host to perform operations on their behalf.
+///
+/// # Example Flow
+///
+/// ```text
+/// Plugin: execute(args) -> Effect::HttpGet { id: 1, url: "..." }
+/// Host:   performs HTTP GET asynchronously
+/// Host:   plugin_resume(1, EffectResult::Http { ... })
+/// Plugin: resume(1, result) -> Success("done")
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum Effect {
+    /// HTTP GET request
+    HttpGet {
+        /// Unique ID for this effect (used in resume)
+        id: u32,
+        /// URL to fetch
+        url: String,
+        /// Optional headers
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        headers: Vec<(String, String)>,
+    },
+
+    /// HTTP POST request
+    HttpPost {
+        /// Unique ID for this effect
+        id: u32,
+        /// URL to post to
+        url: String,
+        /// Request body
+        body: String,
+        /// Content type (default: application/json)
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        content_type: Option<String>,
+        /// Optional headers
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        headers: Vec<(String, String)>,
+    },
+
+    /// Sleep/delay
+    Sleep {
+        /// Unique ID for this effect
+        id: u32,
+        /// Duration in milliseconds
+        duration_ms: u64,
+    },
+}
+
+impl Effect {
+    /// Get the effect ID
+    pub fn id(&self) -> u32 {
+        match self {
+            Effect::HttpGet { id, .. } => *id,
+            Effect::HttpPost { id, .. } => *id,
+            Effect::Sleep { id, .. } => *id,
+        }
+    }
+
+    /// Create an HTTP GET effect
+    pub fn http_get(id: u32, url: impl Into<String>) -> Self {
+        Effect::HttpGet {
+            id,
+            url: url.into(),
+            headers: vec![],
+        }
+    }
+
+    /// Create an HTTP POST effect
+    pub fn http_post(id: u32, url: impl Into<String>, body: impl Into<String>) -> Self {
+        Effect::HttpPost {
+            id,
+            url: url.into(),
+            body: body.into(),
+            content_type: None,
+            headers: vec![],
+        }
+    }
+
+    /// Create a sleep effect
+    pub fn sleep(id: u32, duration_ms: u64) -> Self {
+        Effect::Sleep { id, duration_ms }
+    }
+}
+
+/// Result of an effect, passed back to plugin via resume
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum EffectResult {
+    /// HTTP response
+    Http(HttpResponse),
+
+    /// Sleep completed
+    SleepComplete,
+
+    /// Effect failed
+    Error(String),
+}
+
+/// HTTP response data
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HttpResponse {
+    /// HTTP status code
+    pub status: u16,
+
+    /// Response body as string
+    pub body: String,
+
+    /// Response headers
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub headers: Vec<(String, String)>,
+}
+
+impl HttpResponse {
+    /// Check if status is successful (2xx)
+    pub fn is_success(&self) -> bool {
+        (200..300).contains(&self.status)
+    }
+}
+
+impl ExecuteResult {
+    /// Create an HTTP GET effect
+    pub fn http_get(id: u32, url: impl Into<String>) -> Self {
+        ExecuteResult::Effect(Effect::http_get(id, url))
+    }
+
+    /// Create an HTTP POST effect
+    pub fn http_post(id: u32, url: impl Into<String>, body: impl Into<String>) -> Self {
+        ExecuteResult::Effect(Effect::http_post(id, url, body))
+    }
+
+    /// Create a sleep effect
+    pub fn sleep(id: u32, duration_ms: u64) -> Self {
+        ExecuteResult::Effect(Effect::sleep(id, duration_ms))
+    }
 }
 
 /// Plugin manifest with API version

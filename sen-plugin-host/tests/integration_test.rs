@@ -47,6 +47,9 @@ fn test_execute_hello_plugin_default() {
         ExecuteResult::Error(e) => {
             panic!("Unexpected error: {:?}", e);
         }
+        ExecuteResult::Effect(e) => {
+            panic!("Unexpected effect: {:?}", e);
+        }
     }
 }
 
@@ -69,6 +72,9 @@ fn test_execute_hello_plugin_with_name() {
         }
         ExecuteResult::Error(e) => {
             panic!("Unexpected error: {:?}", e);
+        }
+        ExecuteResult::Effect(e) => {
+            panic!("Unexpected effect: {:?}", e);
         }
     }
 }
@@ -93,6 +99,9 @@ fn test_multiple_executions() {
             }
             ExecuteResult::Error(e) => {
                 panic!("Unexpected error: {:?}", e);
+            }
+            ExecuteResult::Effect(e) => {
+                panic!("Unexpected effect: {:?}", e);
             }
         }
     }
@@ -133,6 +142,9 @@ fn test_execute_greet_plugin_sdk() {
         }
         ExecuteResult::Error(e) => {
             panic!("Unexpected error: {:?}", e);
+        }
+        ExecuteResult::Effect(e) => {
+            panic!("Unexpected effect: {:?}", e);
         }
     }
 }
