@@ -456,8 +456,7 @@ mod tests {
 
     #[test]
     fn test_wasi_state_empty() {
-        let state = WasiState::empty();
+        let _state = WasiState::empty();
         // Just verify it doesn't panic
-        assert!(true);
     }
 }

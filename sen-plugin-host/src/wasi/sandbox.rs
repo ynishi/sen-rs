@@ -176,17 +176,17 @@ impl SandboxValidator {
 
         // 4. Security check: ensure path is within working directory
         // (only for relative paths - absolute paths are explicit grants)
-        if pattern.starts_with("./") || pattern.starts_with("../") || !pattern.starts_with('/') {
-            if !pattern.starts_with('~') {
-                let cwd_canonical = self
-                    .config
-                    .working_directory
-                    .canonicalize()
-                    .unwrap_or_else(|_| self.config.working_directory.clone());
+        let is_relative =
+            pattern.starts_with("./") || pattern.starts_with("../") || !pattern.starts_with('/');
+        if is_relative && !pattern.starts_with('~') {
+            let cwd_canonical = self
+                .config
+                .working_directory
+                .canonicalize()
+                .unwrap_or_else(|_| self.config.working_directory.clone());
 
-                if !resolved.starts_with(&cwd_canonical) {
-                    return Err(WasiError::sandbox_escape(pattern, &resolved));
-                }
+            if !resolved.starts_with(&cwd_canonical) {
+                return Err(WasiError::sandbox_escape(pattern, &resolved));
             }
         }
 
@@ -206,9 +206,9 @@ impl SandboxValidator {
 
     /// Expand `~` to home directory
     fn expand_home(&self, path: &str) -> PathBuf {
-        if path.starts_with("~/") {
+        if let Some(suffix) = path.strip_prefix("~/") {
             if let Some(home) = dirs::home_dir() {
-                return home.join(&path[2..]);
+                return home.join(suffix);
             }
         } else if path == "~" {
             if let Some(home) = dirs::home_dir() {
@@ -315,9 +315,8 @@ pub fn validate_env_pattern(pattern: &str) -> Result<(), WasiError> {
 pub fn expand_env_pattern(pattern: &str) -> Result<Vec<(String, String)>, WasiError> {
     validate_env_pattern(pattern)?;
 
-    if pattern.ends_with('*') {
+    if let Some(prefix) = pattern.strip_suffix('*') {
         // Wildcard pattern: MY_* matches MY_FOO, MY_BAR, etc.
-        let prefix = &pattern[..pattern.len() - 1];
         Ok(std::env::vars()
             .filter(|(key, _)| key.starts_with(prefix))
             .collect())

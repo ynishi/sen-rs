@@ -577,10 +577,11 @@ pub struct PreopenedDir {
 /// /tmp/myapp  → /tmp/myapp
 /// ```
 fn derive_guest_path(pattern: &str) -> String {
-    if pattern.starts_with("./") {
-        format!("/{}", &pattern[2..])
-    } else if pattern.starts_with("~/") {
-        format!("/{}", &pattern[2..])
+    if let Some(suffix) = pattern
+        .strip_prefix("./")
+        .or_else(|| pattern.strip_prefix("~/"))
+    {
+        format!("/{}", suffix)
     } else if pattern.starts_with('/') {
         pattern.to_string()
     } else {

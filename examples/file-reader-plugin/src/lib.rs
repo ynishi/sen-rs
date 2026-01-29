@@ -8,7 +8,6 @@ use sen_plugin_api::{
 };
 use sen_plugin_sdk::prelude::*;
 use std::fs;
-use std::io::Read;
 
 struct FileReaderPlugin;
 
