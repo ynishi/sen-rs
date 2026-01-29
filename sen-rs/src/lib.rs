@@ -100,6 +100,12 @@ pub use clap;
 // Core Types
 // ============================================================================
 
+/// A grouped command entry: (display_name, full_command, description)
+type CommandEntry = (String, String, String);
+
+/// Commands grouped by prefix: Vec<(group_name, Vec<command_entries>)>
+type GroupedCommands = Vec<(String, Vec<CommandEntry>)>;
+
 /// Shared application state wrapper with async-safe interior mutability.
 ///
 /// Wraps your application state in `Arc<RwLock<T>>` for safe concurrent access.
@@ -1585,10 +1591,10 @@ impl Router<()> {
 
     /// Group commands by their prefix (e.g., "db:*" -> "Database Commands").
     /// Returns groups in order: named groups first (sorted), then "Other Commands" last.
-    fn group_commands_by_prefix(&self) -> Vec<(String, Vec<(String, String, String)>)> {
+    fn group_commands_by_prefix(&self) -> GroupedCommands {
         use std::collections::HashMap;
 
-        let mut groups: HashMap<String, Vec<(String, String, String)>> = HashMap::new();
+        let mut groups: HashMap<String, Vec<CommandEntry>> = HashMap::new();
         let mut commands: Vec<_> = self.routes.keys().collect();
         commands.sort();
 
