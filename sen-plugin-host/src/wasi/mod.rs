@@ -182,8 +182,10 @@
 
 pub mod context;
 pub mod error;
+pub mod loader;
 pub mod sandbox;
 
-pub use context::{WasiConfig, WasiConfigurer};
+pub use context::{PreopenedDir, WasiConfig, WasiConfigurer, WasiSpec};
 pub use error::WasiError;
+pub use loader::{WasiLoadedPlugin, WasiLoaderConfig, WasiPluginInstance, WasiPluginLoader};
 pub use sandbox::{SandboxConfig, SandboxValidator};

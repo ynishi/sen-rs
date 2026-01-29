@@ -339,6 +339,160 @@ impl WasiSpec {
         }
     }
 
+    /// Build a WASI Preview 1 context for module-based plugins
+    ///
+    /// This is the primary method for building WASI contexts for traditional
+    /// WASM modules (not components). Most plugins use this.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let spec = WasiConfigurer::new()
+    ///     .with_capabilities(&caps)
+    ///     .with_working_directory(cwd)
+    ///     .build()?;
+    ///
+    /// let wasi_ctx = spec.build_p1_ctx()?;
+    /// let mut store = Store::new(&engine, wasi_ctx);
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WasiError`] if:
+    /// - A preopened directory cannot be opened
+    /// - Directory permissions cannot be configured
+    pub fn build_p1_ctx(self) -> Result<wasmtime_wasi::preview1::WasiP1Ctx, WasiError> {
+        use wasmtime_wasi::{DirPerms, FilePerms, WasiCtxBuilder};
+
+        let mut builder = WasiCtxBuilder::new();
+
+        // Set program arguments
+        let mut all_args = vec![self.program_name];
+        all_args.extend(self.args);
+        builder.args(&all_args);
+
+        // Set environment variables
+        for (key, value) in &self.env_vars {
+            builder.env(key, value);
+        }
+
+        // Configure stdio
+        if self.inherit_stdin {
+            builder.inherit_stdin();
+        }
+        if self.inherit_stdout {
+            builder.inherit_stdout();
+        }
+        if self.inherit_stderr {
+            builder.inherit_stderr();
+        }
+
+        // Configure preopened directories
+        for dir in &self.preopened_dirs {
+            let dir_perms = if dir.writable {
+                DirPerms::all()
+            } else {
+                DirPerms::READ
+            };
+
+            let file_perms = if dir.writable {
+                FilePerms::all()
+            } else {
+                FilePerms::READ
+            };
+
+            builder
+                .preopened_dir(&dir.host_path, &dir.guest_path, dir_perms, file_perms)
+                .map_err(|e| WasiError::PreopenFailed {
+                    path: dir.host_path.clone(),
+                    source: std::io::Error::other(e.to_string()),
+                })?;
+        }
+
+        Ok(builder.build_p1())
+    }
+
+    /// Build the actual WASI context for wasmtime (Component Model)
+    ///
+    /// This is for use with the WebAssembly Component Model.
+    /// For traditional WASM modules, use [`build_p1_ctx`] instead.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let spec = WasiConfigurer::new()
+    ///     .with_capabilities(&caps)
+    ///     .with_working_directory(cwd)
+    ///     .build()?;
+    ///
+    /// let wasi_ctx = spec.build_ctx()?;
+    /// let mut store = Store::new(&engine, wasi_ctx);
+    /// ```
+    pub fn build_ctx(self) -> Result<wasmtime_wasi::WasiCtx, WasiError> {
+        use wasmtime_wasi::{DirPerms, FilePerms, WasiCtxBuilder};
+
+        let mut builder = WasiCtxBuilder::new();
+
+        // Set program arguments
+        let mut all_args = vec![self.program_name.clone()];
+        all_args.extend(self.args.clone());
+        builder.args(&all_args);
+
+        // Set environment variables
+        for (key, value) in &self.env_vars {
+            builder.env(key, value);
+        }
+
+        // Configure stdio
+        if self.inherit_stdin {
+            builder.inherit_stdin();
+        }
+        if self.inherit_stdout {
+            builder.inherit_stdout();
+        }
+        if self.inherit_stderr {
+            builder.inherit_stderr();
+        }
+
+        // Configure preopened directories
+        for dir in &self.preopened_dirs {
+            let dir_perms = if dir.writable {
+                DirPerms::all()
+            } else {
+                DirPerms::READ
+            };
+
+            let file_perms = if dir.writable {
+                FilePerms::all()
+            } else {
+                FilePerms::READ
+            };
+
+            builder
+                .preopened_dir(&dir.host_path, &dir.guest_path, dir_perms, file_perms)
+                .map_err(|e| WasiError::PreopenFailed {
+                    path: dir.host_path.clone(),
+                    source: std::io::Error::other(e.to_string()),
+                })?;
+        }
+
+        Ok(builder.build())
+    }
+
+    /// Build WASI context and return it along with a ResourceTable
+    ///
+    /// This is the recommended method when you need both the context and
+    /// the resource table for the wasmtime store (Component Model).
+    ///
+    /// For traditional WASM modules, use [`build_p1_ctx`] instead.
+    pub fn build_ctx_with_table(
+        self,
+    ) -> Result<(wasmtime_wasi::WasiCtx, wasmtime_wasi::ResourceTable), WasiError> {
+        let ctx = self.build_ctx()?;
+        let table = wasmtime_wasi::ResourceTable::new();
+        Ok((ctx, table))
+    }
+
     /// Check if this spec grants any filesystem access
     pub fn has_fs_access(&self) -> bool {
         !self.preopened_dirs.is_empty()
