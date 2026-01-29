@@ -386,10 +386,19 @@ pub enum RegistryError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::audit::MemoryAuditSink;
+    use crate::permission::{
+        AutoPromptHandler, MemoryPermissionStore, PermissionPresets, PermissionStore, PromptResult,
+        RecordingPromptHandler,
+    };
 
     const HELLO_PLUGIN_WASM: &[u8] = include_bytes!(
         "../../examples/hello-plugin/target/wasm32-unknown-unknown/release/hello_plugin.wasm"
     );
+
+    // ========================================================================
+    // Basic Registry Tests (without permissions)
+    // ========================================================================
 
     #[tokio::test]
     async fn test_registry_register_and_execute() {
@@ -436,5 +445,233 @@ mod tests {
 
         let commands = registry.list_commands().await;
         assert_eq!(commands, vec!["hello"]);
+    }
+
+    // ========================================================================
+    // Permission Integration Tests
+    // ========================================================================
+
+    #[tokio::test]
+    async fn test_registry_with_permissions_trust_all() {
+        // TrustAll strategy should allow execution without prompts
+        let config = PermissionPresets::trust_all_dangerous();
+        let registry = PluginRegistry::with_permissions(config).unwrap();
+
+        let loader = PluginLoader::new().unwrap();
+        let plugin = loader.load(HELLO_PLUGIN_WASM).unwrap();
+        registry.register(plugin).await;
+
+        let result = registry
+            .execute("hello", &["World".to_string()])
+            .await
+            .unwrap();
+
+        match result {
+            sen_plugin_api::ExecuteResult::Success(output) => {
+                assert_eq!(output, "Hello, World!");
+            }
+            _ => panic!("Expected success with trust_all"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_registry_with_permissions_testing_preset() {
+        // Testing preset uses auto-approve, should allow execution
+        let config = PermissionPresets::testing();
+        let registry = PluginRegistry::with_permissions(config).unwrap();
+
+        let loader = PluginLoader::new().unwrap();
+        let plugin = loader.load(HELLO_PLUGIN_WASM).unwrap();
+        registry.register(plugin).await;
+
+        let result = registry
+            .execute("hello", &["World".to_string()])
+            .await
+            .unwrap();
+
+        match result {
+            sen_plugin_api::ExecuteResult::Success(output) => {
+                assert_eq!(output, "Hello, World!");
+            }
+            _ => panic!("Expected success with testing preset"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_registry_with_permissions_deny_on_prompt() {
+        // Custom config with auto-deny prompt handler
+        let config = PermissionConfig::new(
+            crate::permission::DefaultPermissionStrategy,
+            MemoryPermissionStore::new(),
+            AutoPromptHandler::always_deny(),
+            crate::audit::NullAuditSink,
+            crate::permission::TrustFlagConfig::default(),
+        );
+
+        let registry = PluginRegistry::with_permissions(config).unwrap();
+
+        let loader = PluginLoader::new().unwrap();
+        let mut plugin = loader.load(HELLO_PLUGIN_WASM).unwrap();
+
+        // Add capabilities to trigger permission check
+        plugin.manifest.capabilities = sen_plugin_api::Capabilities::default()
+            .with_stdio(sen_plugin_api::StdioCapability::stdout_only());
+
+        registry.register(plugin).await;
+
+        let result = registry.execute("hello", &["World".to_string()]).await;
+
+        match result {
+            Err(RegistryError::PermissionDenied { plugin, reason }) => {
+                assert_eq!(plugin, "hello");
+                assert!(reason.contains("denied"));
+            }
+            Ok(_) => panic!("Expected PermissionDenied error"),
+            Err(e) => panic!("Unexpected error: {:?}", e),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_registry_with_permissions_audit_logging() {
+        // Verify audit events are recorded
+        let audit_sink = std::sync::Arc::new(MemoryAuditSink::new());
+
+        let config = PermissionConfig {
+            strategy: std::sync::Arc::new(crate::permission::DefaultPermissionStrategy),
+            store: std::sync::Arc::new(MemoryPermissionStore::new()),
+            prompt: std::sync::Arc::new(AutoPromptHandler::always_allow()),
+            audit: audit_sink.clone(),
+            trust_flags: crate::permission::TrustFlagConfig::default(),
+        };
+
+        let registry = PluginRegistry::with_permissions(config).unwrap();
+
+        let loader = PluginLoader::new().unwrap();
+        let mut plugin = loader.load(HELLO_PLUGIN_WASM).unwrap();
+        plugin.manifest.capabilities = sen_plugin_api::Capabilities::default()
+            .with_stdio(sen_plugin_api::StdioCapability::stdout_only());
+
+        registry.register(plugin).await;
+        let _ = registry.execute("hello", &["World".to_string()]).await;
+
+        // Verify audit events were recorded
+        let events = audit_sink.events();
+        assert!(!events.is_empty(), "Should have audit events");
+
+        // Should have at least a permission request event
+        let request_events = audit_sink.find_by_type(crate::audit::AuditEventType::PermissionRequested);
+        assert!(!request_events.is_empty(), "Should have permission request event");
+    }
+
+    #[tokio::test]
+    async fn test_registry_with_permissions_stores_grant() {
+        // Verify that granted permissions are stored
+        let store = std::sync::Arc::new(MemoryPermissionStore::new());
+
+        let config = PermissionConfig {
+            strategy: std::sync::Arc::new(crate::permission::DefaultPermissionStrategy),
+            store: store.clone(),
+            prompt: std::sync::Arc::new(AutoPromptHandler::always_allow()),
+            audit: std::sync::Arc::new(crate::audit::NullAuditSink),
+            trust_flags: crate::permission::TrustFlagConfig::default(),
+        };
+
+        let registry = PluginRegistry::with_permissions(config).unwrap();
+
+        let loader = PluginLoader::new().unwrap();
+        let mut plugin = loader.load(HELLO_PLUGIN_WASM).unwrap();
+        plugin.manifest.capabilities = sen_plugin_api::Capabilities::default()
+            .with_stdio(sen_plugin_api::StdioCapability::stdout_only());
+
+        registry.register(plugin).await;
+        let _ = registry.execute("hello", &["World".to_string()]).await;
+
+        // Verify permission was stored
+        let stored = store.get("hello").unwrap();
+        assert!(stored.is_some(), "Permission should be stored after grant");
+    }
+
+    #[tokio::test]
+    async fn test_registry_with_permissions_prompt_recording() {
+        // Verify prompts are triggered correctly
+        let prompt_handler = std::sync::Arc::new(RecordingPromptHandler::new(PromptResult::AllowAlways));
+
+        let config = PermissionConfig {
+            strategy: std::sync::Arc::new(crate::permission::DefaultPermissionStrategy),
+            store: std::sync::Arc::new(MemoryPermissionStore::new()),
+            prompt: prompt_handler.clone(),
+            audit: std::sync::Arc::new(crate::audit::NullAuditSink),
+            trust_flags: crate::permission::TrustFlagConfig::default(),
+        };
+
+        let registry = PluginRegistry::with_permissions(config).unwrap();
+
+        let loader = PluginLoader::new().unwrap();
+        let mut plugin = loader.load(HELLO_PLUGIN_WASM).unwrap();
+        plugin.manifest.capabilities = sen_plugin_api::Capabilities::default()
+            .with_stdio(sen_plugin_api::StdioCapability::stdout_only());
+
+        registry.register(plugin).await;
+        let _ = registry.execute("hello", &["World".to_string()]).await;
+
+        // Verify prompt was called
+        assert_eq!(prompt_handler.prompt_count(), 1, "Should have prompted once");
+        let prompts = prompt_handler.prompts();
+        assert_eq!(prompts[0].plugin, "hello");
+    }
+
+    #[tokio::test]
+    async fn test_registry_without_permissions_skips_check() {
+        // Registry without permission config should skip all checks
+        let registry = PluginRegistry::new().unwrap();
+
+        let loader = PluginLoader::new().unwrap();
+        let mut plugin = loader.load(HELLO_PLUGIN_WASM).unwrap();
+
+        // Even with capabilities declared, no check should happen
+        plugin.manifest.capabilities = sen_plugin_api::Capabilities::default()
+            .with_fs_read(vec![sen_plugin_api::PathPattern::new("/")]);
+
+        registry.register(plugin).await;
+
+        // Should execute without any permission checks
+        let result = registry
+            .execute("hello", &["World".to_string()])
+            .await
+            .unwrap();
+
+        match result {
+            sen_plugin_api::ExecuteResult::Success(output) => {
+                assert_eq!(output, "Hello, World!");
+            }
+            _ => panic!("Expected success without permission config"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_registry_empty_capabilities_allowed() {
+        // Plugins with no capabilities should be allowed without prompt
+        let prompt_handler = std::sync::Arc::new(RecordingPromptHandler::new(PromptResult::Deny));
+
+        let config = PermissionConfig {
+            strategy: std::sync::Arc::new(crate::permission::DefaultPermissionStrategy),
+            store: std::sync::Arc::new(MemoryPermissionStore::new()),
+            prompt: prompt_handler.clone(),
+            audit: std::sync::Arc::new(crate::audit::NullAuditSink),
+            trust_flags: crate::permission::TrustFlagConfig::default(),
+        };
+
+        let registry = PluginRegistry::with_permissions(config).unwrap();
+
+        let loader = PluginLoader::new().unwrap();
+        let plugin = loader.load(HELLO_PLUGIN_WASM).unwrap();
+        // Default capabilities are empty
+
+        registry.register(plugin).await;
+        let result = registry.execute("hello", &["World".to_string()]).await;
+
+        // Should succeed without prompting (empty caps = no permissions needed)
+        assert!(result.is_ok(), "Empty capabilities should be allowed");
+        assert_eq!(prompt_handler.prompt_count(), 0, "Should not prompt for empty caps");
     }
 }
