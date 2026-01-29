@@ -1,0 +1,17 @@
+[package]
+name = "file-reader-plugin"
+version = "0.1.0"
+edition = "2021"
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+sen-plugin-sdk = { path = "../../sen-plugin-sdk" }
+sen-plugin-api = { path = "../../sen-plugin-api" }
+
+[profile.release]
+opt-level = "s"
+lto = true

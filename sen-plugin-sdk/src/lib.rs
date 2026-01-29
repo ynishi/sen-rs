@@ -498,8 +498,11 @@ pub mod memory {
     ///
     /// Returns a packed i64 containing the pointer and length.
     /// Returns (0, 0) on serialization failure or if data exceeds i32::MAX bytes.
+    ///
+    /// Uses named serialization for compatibility with `skip_serializing_if` attributes.
     pub fn serialize_and_return<T: serde::Serialize>(data: &T) -> i64 {
-        let bytes = match rmp_serde::to_vec(data) {
+        // Use to_vec_named for proper handling of optional/skipped fields
+        let bytes = match rmp_serde::to_vec_named(data) {
             Ok(b) => b,
             Err(_) => return pack_ptr_len(0, 0),
         };

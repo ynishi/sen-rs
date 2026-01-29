@@ -1,0 +1,5 @@
+Hello from WASI!
+This file is being read by a WASM plugin.
+Line 3
+Line 4
+Line 5
