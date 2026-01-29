@@ -201,6 +201,9 @@ pub mod permission;
 pub mod registry;
 pub mod watcher;
 
+#[cfg(feature = "wasi")]
+pub mod wasi;
+
 #[cfg(feature = "sen-integration")]
 pub mod bridge;
 
