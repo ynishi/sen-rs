@@ -863,12 +863,65 @@ myapp --trust-command=db:migrate  # Trust specific command
 | CI | Never prompts, requires pre-granted |
 | TrustAll | Bypasses all checks (dev only) |
 
+### Effect System (Async I/O)
+
+Plugins run in a sandboxed WASM environment without direct network access.
+The Effect system allows plugins to request async operations from the host:
+
+```
+┌─────────────┐     execute()      ┌──────────┐
+│   Plugin    │ ─────────────────→ │   Host   │
+│             │ ← Effect::HttpGet  │          │
+│             │                    │ (async)  │
+│             │  resume(result)    │  fetch   │
+│             │ ←─────────────────│          │
+│             │ → Success(...)     │          │
+└─────────────┘                    └──────────┘
+```
+
+**Plugin side:**
+```rust
+use sen_plugin_sdk::prelude::*;
+
+impl Plugin for HttpPlugin {
+    fn execute(args: Vec<String>) -> ExecuteResult {
+        let url = args.first().unwrap();
+        // Request host to perform HTTP GET
+        ExecuteResult::http_get(1, url)
+    }
+
+    fn resume(_effect_id: u32, result: EffectResult) -> ExecuteResult {
+        match result {
+            EffectResult::Http(resp) if resp.is_success() => {
+                ExecuteResult::success(resp.body)
+            }
+            EffectResult::Http(resp) => {
+                ExecuteResult::user_error(format!("HTTP {}", resp.status))
+            }
+            EffectResult::Error(e) => ExecuteResult::user_error(e),
+            _ => ExecuteResult::system_error("Unexpected result"),
+        }
+    }
+}
+```
+
+**Available Effects:**
+
+| Effect | Description |
+|--------|-------------|
+| `HttpGet` | HTTP GET request |
+| `HttpPost` | HTTP POST request |
+| `Sleep` | Delay execution |
+
 ### Plugin Examples
 
 See the examples directory:
 - `examples/hello-plugin/` - Manual WASM implementation (Rust)
 - `examples/greet-plugin/` - SDK-based plugin (Rust)
 - `examples/echo-plugin-zig/` - Zig SDK example
+- `examples/file-reader-plugin/` - WASI filesystem access (Rust)
+- `examples/env-reader-plugin-zig/` - WASI environment access (Zig)
+- `examples/http-plugin/` - Effect system HTTP demo (Rust)
 
 ## 🏗️ Architecture
 
@@ -946,7 +999,8 @@ cargo test -p sen-rs-macros
   - [x] Router integration
   - [x] Capabilities & Permission system
   - [x] Audit logging
-  - [ ] WASI integration (planned)
+  - [x] WASI Preview 1 integration (fs, env, stdio)
+  - [x] Effect system (host-side async I/O)
 - [ ] Phase 4: Advanced features (ReloadableConfig, tracing)
 - [ ] Phase 5: Developer experience (CLI generator, templates)
 
