@@ -216,6 +216,13 @@ impl PermissionStrategy for CiPermissionStrategy {
 ///
 /// - Allows all capabilities without prompt
 /// - Should only be used in development/testing
+///
+/// # Warning
+///
+/// This strategy bypasses ALL permission checks. Only use in:
+/// - Local development environments
+/// - Controlled testing scenarios
+/// - Never in production or with untrusted plugins
 #[derive(Debug)]
 pub struct TrustAllStrategy {
     _private: (),
@@ -224,9 +231,11 @@ pub struct TrustAllStrategy {
 impl TrustAllStrategy {
     /// Create a new trust-all strategy
     ///
-    /// # Safety
+    /// # Warning
     ///
     /// This strategy bypasses all permission checks. Only use in controlled environments.
+    /// The returned value must be used - ignoring it likely indicates a bug.
+    #[must_use = "TrustAllStrategy must be used in a PermissionConfig, ignoring it is likely a bug"]
     pub fn new_dangerous() -> Self {
         Self { _private: () }
     }

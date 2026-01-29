@@ -427,9 +427,31 @@ impl PromptHandler for RecordingPromptHandler {
 
 /// Check if stdin/stdout are connected to a terminal
 fn atty_check() -> bool {
-    // Simple check without external dependency
-    // In production, you might want to use the `atty` crate
-    std::env::var("TERM").is_ok() || cfg!(test)
+    // Use platform-specific checks for reliable terminal detection
+    #[cfg(unix)]
+    {
+        use std::os::unix::io::AsRawFd;
+        // Check if stdout is a TTY using libc
+        // SAFETY: isatty is safe to call with any file descriptor
+        unsafe { libc::isatty(std::io::stdout().as_raw_fd()) != 0 }
+    }
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::io::AsRawHandle;
+        // On Windows, check console mode
+        use windows_sys::Win32::System::Console::{GetConsoleMode, CONSOLE_MODE};
+        let handle = std::io::stdout().as_raw_handle();
+        let mut mode: CONSOLE_MODE = 0;
+        // SAFETY: GetConsoleMode is safe with valid handle
+        unsafe { GetConsoleMode(handle as _, &mut mode) != 0 }
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    {
+        // Fallback for other platforms
+        std::env::var("TERM").is_ok()
+    }
 }
 
 #[cfg(test)]

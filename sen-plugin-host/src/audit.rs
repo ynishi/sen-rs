@@ -3,8 +3,10 @@
 //! Provides a trait-based audit system that framework users can customize
 //! to log permission-related events to their preferred destination.
 
+use chrono::{DateTime, Utc};
 use sen_plugin_api::Capabilities;
 use serde::Serialize;
+use std::collections::VecDeque;
 use std::fmt;
 use std::fs::{File, OpenOptions};
 use std::io::{BufWriter, Write};
@@ -17,13 +19,8 @@ pub type Timestamp = String;
 
 /// Get current timestamp in ISO 8601 format
 fn now_iso8601() -> Timestamp {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let duration = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default();
-    let secs = duration.as_secs();
-    // Simple ISO 8601 format without external dependencies
-    format!("{}", secs)
+    let now: DateTime<Utc> = Utc::now();
+    now.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string()
 }
 
 /// Audit event representing a permission-related action
@@ -264,8 +261,10 @@ impl fmt::Debug for FileAuditSink {
 }
 
 /// In-memory audit sink for testing
+///
+/// Uses a ring buffer (VecDeque) for O(1) FIFO eviction when capacity is reached.
 pub struct MemoryAuditSink {
-    events: RwLock<Vec<AuditEvent>>,
+    events: RwLock<VecDeque<AuditEvent>>,
     max_events: usize,
 }
 
@@ -278,14 +277,14 @@ impl MemoryAuditSink {
     /// Create a new memory sink with specified capacity
     pub fn with_capacity(max_events: usize) -> Self {
         Self {
-            events: RwLock::new(Vec::with_capacity(max_events.min(1000))),
+            events: RwLock::new(VecDeque::with_capacity(max_events.min(1000))),
             max_events,
         }
     }
 
     /// Get all recorded events
     pub fn events(&self) -> Vec<AuditEvent> {
-        self.events.read().unwrap().clone()
+        self.events.read().unwrap().iter().cloned().collect()
     }
 
     /// Get event count
@@ -331,9 +330,9 @@ impl AuditSink for MemoryAuditSink {
     fn record(&self, event: AuditEvent) -> Result<(), AuditError> {
         let mut events = self.events.write().unwrap();
         if events.len() >= self.max_events {
-            events.remove(0); // FIFO eviction
+            events.pop_front(); // O(1) FIFO eviction with VecDeque
         }
-        events.push(event);
+        events.push_back(event);
         Ok(())
     }
 
