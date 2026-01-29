@@ -236,13 +236,13 @@ impl FileAuditSink {
 impl AuditSink for FileAuditSink {
     fn record(&self, event: AuditEvent) -> Result<(), AuditError> {
         let json = serde_json::to_string(&event)?;
-        let mut writer = self.writer.lock().unwrap();
+        let mut writer = self.writer.lock().expect("FileAuditSink mutex poisoned");
         writeln!(writer, "{}", json)?;
         Ok(())
     }
 
     fn flush(&self) -> Result<(), AuditError> {
-        let mut writer = self.writer.lock().unwrap();
+        let mut writer = self.writer.lock().expect("FileAuditSink mutex poisoned");
         writer.flush()?;
         Ok(())
     }
@@ -284,24 +284,35 @@ impl MemoryAuditSink {
 
     /// Get all recorded events
     pub fn events(&self) -> Vec<AuditEvent> {
-        self.events.read().unwrap().iter().cloned().collect()
+        self.events
+            .read()
+            .expect("MemoryAuditSink RwLock poisoned")
+            .iter()
+            .cloned()
+            .collect()
     }
 
     /// Get event count
     pub fn count(&self) -> usize {
-        self.events.read().unwrap().len()
+        self.events
+            .read()
+            .expect("MemoryAuditSink RwLock poisoned")
+            .len()
     }
 
     /// Clear all events
     pub fn clear(&self) {
-        self.events.write().unwrap().clear();
+        self.events
+            .write()
+            .expect("MemoryAuditSink RwLock poisoned")
+            .clear();
     }
 
     /// Find events by type
     pub fn find_by_type(&self, event_type: AuditEventType) -> Vec<AuditEvent> {
         self.events
             .read()
-            .unwrap()
+            .expect("MemoryAuditSink RwLock poisoned")
             .iter()
             .filter(|e| e.event_type == event_type)
             .cloned()
@@ -312,7 +323,7 @@ impl MemoryAuditSink {
     pub fn find_by_plugin(&self, plugin: &str) -> Vec<AuditEvent> {
         self.events
             .read()
-            .unwrap()
+            .expect("MemoryAuditSink RwLock poisoned")
             .iter()
             .filter(|e| e.plugin == plugin)
             .cloned()
@@ -328,7 +339,10 @@ impl Default for MemoryAuditSink {
 
 impl AuditSink for MemoryAuditSink {
     fn record(&self, event: AuditEvent) -> Result<(), AuditError> {
-        let mut events = self.events.write().unwrap();
+        let mut events = self
+            .events
+            .write()
+            .expect("MemoryAuditSink RwLock poisoned");
         if events.len() >= self.max_events {
             events.pop_front(); // O(1) FIFO eviction with VecDeque
         }

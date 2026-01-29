@@ -9,3 +9,4 @@ description = "WIT-generated API types for sen-rs plugin system"
 [dependencies]
 serde = { workspace = true }
 rmp-serde = { workspace = true }
+blake3 = "1.5"

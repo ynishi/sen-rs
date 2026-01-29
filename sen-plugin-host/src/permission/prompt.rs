@@ -374,17 +374,26 @@ impl RecordingPromptHandler {
 
     /// Get all recorded prompts
     pub fn prompts(&self) -> Vec<RecordedPrompt> {
-        self.prompts.lock().unwrap().clone()
+        self.prompts
+            .lock()
+            .expect("RecordingPromptHandler mutex poisoned")
+            .clone()
     }
 
     /// Get the number of prompts
     pub fn prompt_count(&self) -> usize {
-        self.prompts.lock().unwrap().len()
+        self.prompts
+            .lock()
+            .expect("RecordingPromptHandler mutex poisoned")
+            .len()
     }
 
     /// Clear recorded prompts
     pub fn clear(&self) {
-        self.prompts.lock().unwrap().clear();
+        self.prompts
+            .lock()
+            .expect("RecordingPromptHandler mutex poisoned")
+            .clear();
     }
 }
 
@@ -394,11 +403,14 @@ impl PromptHandler for RecordingPromptHandler {
         plugin: &str,
         capabilities: &Capabilities,
     ) -> Result<PromptResult, PromptError> {
-        self.prompts.lock().unwrap().push(RecordedPrompt {
-            plugin: plugin.to_string(),
-            capabilities_hash: capabilities.compute_hash(),
-            is_escalation: false,
-        });
+        self.prompts
+            .lock()
+            .expect("RecordingPromptHandler mutex poisoned")
+            .push(RecordedPrompt {
+                plugin: plugin.to_string(),
+                capabilities_hash: capabilities.compute_hash(),
+                is_escalation: false,
+            });
         Ok(self.response.clone())
     }
 
@@ -412,11 +424,14 @@ impl PromptHandler for RecordingPromptHandler {
         _old_caps: &Capabilities,
         new_caps: &Capabilities,
     ) -> Result<PromptResult, PromptError> {
-        self.prompts.lock().unwrap().push(RecordedPrompt {
-            plugin: plugin.to_string(),
-            capabilities_hash: new_caps.compute_hash(),
-            is_escalation: true,
-        });
+        self.prompts
+            .lock()
+            .expect("RecordingPromptHandler mutex poisoned")
+            .push(RecordedPrompt {
+                plugin: plugin.to_string(),
+                capabilities_hash: new_caps.compute_hash(),
+                is_escalation: true,
+            });
         Ok(self.response.clone())
     }
 }

@@ -145,16 +145,22 @@ impl Capabilities {
     }
 
     /// Compute hash for change detection
+    ///
+    /// Uses blake3 for cross-process stability (unlike DefaultHasher which
+    /// may produce different hashes across processes/runs).
     pub fn compute_hash(&self) -> String {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-
-        let mut hasher = DefaultHasher::new();
-        // Hash serialized form for stability
-        if let Ok(bytes) = rmp_serde::to_vec(self) {
-            bytes.hash(&mut hasher);
+        // Use MessagePack serialization for deterministic byte representation
+        match rmp_serde::to_vec(self) {
+            Ok(bytes) => {
+                let hash = blake3::hash(&bytes);
+                // Return first 16 hex chars for reasonable length
+                hash.to_hex()[..16].to_string()
+            }
+            Err(_) => {
+                // Fallback: empty capabilities hash
+                "0000000000000000".to_string()
+            }
         }
-        format!("{:016x}", hasher.finish())
     }
 }
 

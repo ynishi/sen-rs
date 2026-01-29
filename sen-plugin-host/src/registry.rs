@@ -2,7 +2,28 @@
 //!
 //! Provides a thread-safe registry for managing loaded plugins with
 //! support for dynamic addition, removal, and updates.
+//!
+//! # Permission System Integration
+//!
+//! The registry supports an optional permission system for capability-based
+//! access control. When enabled, plugins are checked against their declared
+//! capabilities before execution.
+//!
+//! ```rust,ignore
+//! use sen_plugin_host::{PluginRegistry, PermissionPresets};
+//!
+//! // With permission checking
+//! let config = PermissionPresets::interactive("myapp")?;
+//! let registry = PluginRegistry::with_permissions(config)?;
+//!
+//! // Execution will check capabilities and prompt if needed
+//! registry.execute("hello", &["World"]).await?;
+//! ```
 
+use crate::audit::{self, TrustLevel};
+use crate::permission::{
+    PermissionConfig, PermissionContext, PermissionDecision, StoredPermission, StoredTrustLevel,
+};
 use crate::{LoadedPlugin, LoaderError, PluginLoader};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -14,6 +35,7 @@ use tokio::sync::RwLock;
 pub struct PluginRegistry {
     inner: Arc<RwLock<RegistryInner>>,
     loader: Arc<PluginLoader>,
+    permission: Option<Arc<PermissionConfig>>,
 }
 
 struct RegistryInner {
@@ -37,6 +59,7 @@ impl PluginRegistry {
                 path_to_command: HashMap::new(),
             })),
             loader: Arc::new(PluginLoader::new()?),
+            permission: None,
         })
     }
 
@@ -48,7 +71,28 @@ impl PluginRegistry {
                 path_to_command: HashMap::new(),
             })),
             loader: Arc::new(loader),
+            permission: None,
         }
+    }
+
+    /// Create with permission configuration
+    ///
+    /// When permission config is set, the registry will check plugin
+    /// capabilities before execution and prompt users as needed.
+    pub fn with_permissions(config: PermissionConfig) -> Result<Self, LoaderError> {
+        Ok(Self {
+            inner: Arc::new(RwLock::new(RegistryInner {
+                plugins: HashMap::new(),
+                path_to_command: HashMap::new(),
+            })),
+            loader: Arc::new(PluginLoader::new()?),
+            permission: Some(Arc::new(config)),
+        })
+    }
+
+    /// Add permission configuration to an existing registry
+    pub fn set_permissions(&mut self, config: PermissionConfig) {
+        self.permission = Some(Arc::new(config));
     }
 
     /// Load and register a plugin from a file path
@@ -148,6 +192,13 @@ impl PluginRegistry {
     }
 
     /// Execute a plugin command
+    ///
+    /// If permission configuration is set, this will:
+    /// 1. Check stored permissions for the plugin
+    /// 2. Apply the permission strategy to decide allow/deny/prompt
+    /// 3. Prompt the user if needed (for interactive mode)
+    /// 4. Record audit events
+    /// 5. Execute the plugin if permitted
     pub async fn execute(
         &self,
         command_name: &str,
@@ -159,6 +210,126 @@ impl PluginRegistry {
             .plugins
             .get_mut(command_name)
             .ok_or_else(|| RegistryError::CommandNotFound(command_name.to_string()))?;
+
+        // Check permissions if configured
+        if let Some(ref perm_config) = self.permission {
+            let capabilities = &entry.plugin.manifest.capabilities;
+
+            // Record permission request audit event
+            let _ = perm_config
+                .audit
+                .record(audit::permission_requested(command_name, capabilities));
+
+            // Get stored permission
+            let key = perm_config.store.make_key(
+                command_name,
+                None,
+                perm_config.strategy.granularity(),
+            );
+            let stored = perm_config.store.get(&key).ok().flatten();
+
+            // Build context for strategy
+            let ctx = PermissionContext {
+                plugin_name: command_name,
+                command_path: &[],
+                requested: capabilities,
+                granted: stored.as_ref().map(|s| &s.capabilities),
+                interactive: perm_config.prompt.is_interactive(),
+            };
+
+            // Check for escalation
+            let decision = if let Some(ref stored_perm) = stored {
+                if stored_perm.has_escalated(capabilities) {
+                    // Record escalation audit event
+                    let _ = perm_config.audit.record(audit::escalation_detected(
+                        command_name,
+                        &stored_perm.capabilities,
+                        capabilities,
+                    ));
+                    perm_config.strategy.on_escalation(&ctx)
+                } else {
+                    perm_config.strategy.check(&ctx)
+                }
+            } else {
+                perm_config.strategy.check(&ctx)
+            };
+
+            // Handle decision
+            match decision {
+                PermissionDecision::Allow => {
+                    let _ = perm_config.audit.record(audit::permission_granted(
+                        command_name,
+                        capabilities,
+                        TrustLevel::Permanent,
+                    ));
+                }
+                PermissionDecision::Deny(reason) => {
+                    let _ = perm_config.audit.record(audit::permission_denied(
+                        command_name,
+                        capabilities,
+                        &reason,
+                    ));
+                    return Err(RegistryError::PermissionDenied {
+                        plugin: command_name.to_string(),
+                        reason,
+                    });
+                }
+                PermissionDecision::Prompt => {
+                    // Prompt user
+                    let prompt_result = if let Some(ref stored_perm) = stored {
+                        perm_config.prompt.prompt_escalation(
+                            command_name,
+                            &stored_perm.capabilities,
+                            capabilities,
+                        )
+                    } else {
+                        perm_config.prompt.prompt(command_name, capabilities)
+                    };
+
+                    match prompt_result {
+                        Ok(result) if result.is_allowed() => {
+                            // Store permission if should persist
+                            if result.should_persist() {
+                                let trust_level = result.to_trust_level().unwrap_or(StoredTrustLevel::Session);
+                                let stored_perm = StoredPermission::new(capabilities.clone(), trust_level);
+                                let _ = perm_config.store.set(&key, stored_perm);
+                            }
+
+                            let audit_trust = match result.to_trust_level() {
+                                Some(StoredTrustLevel::Permanent) => TrustLevel::Permanent,
+                                Some(StoredTrustLevel::Session) => TrustLevel::Session,
+                                None => TrustLevel::Once,
+                            };
+                            let _ = perm_config.audit.record(audit::permission_granted(
+                                command_name,
+                                capabilities,
+                                audit_trust,
+                            ));
+                        }
+                        Ok(_) | Err(_) => {
+                            let _ = perm_config.audit.record(audit::permission_denied(
+                                command_name,
+                                capabilities,
+                                "User denied permission",
+                            ));
+                            return Err(RegistryError::PermissionDenied {
+                                plugin: command_name.to_string(),
+                                reason: "User denied permission".to_string(),
+                            });
+                        }
+                    }
+                }
+                PermissionDecision::AllowPartial(_reduced) => {
+                    // For now, treat partial as full allow
+                    // Future: could pass reduced capabilities to plugin
+                    let _ = perm_config.audit.record(audit::permission_granted(
+                        command_name,
+                        capabilities,
+                        TrustLevel::Once,
+                    ));
+                }
+            }
+        }
 
         entry
             .plugin
@@ -207,6 +378,9 @@ pub enum RegistryError {
 
     #[error("Plugin execution failed: {0}")]
     Execution(#[source] LoaderError),
+
+    #[error("Permission denied for plugin '{plugin}': {reason}")]
+    PermissionDenied { plugin: String, reason: String },
 }
 
 #[cfg(test)]

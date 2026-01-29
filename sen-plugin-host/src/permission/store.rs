@@ -182,7 +182,10 @@ impl FilePermissionStore {
             fs::create_dir_all(parent)?;
         }
 
-        let data = self.data.read().unwrap();
+        let data = self
+            .data
+            .read()
+            .expect("FilePermissionStore RwLock poisoned");
         let file = File::create(&self.path)?;
         let writer = BufWriter::new(file);
         serde_json::to_writer_pretty(writer, &*data)?;
@@ -192,13 +195,19 @@ impl FilePermissionStore {
 
 impl PermissionStore for FilePermissionStore {
     fn get(&self, key: &str) -> Result<Option<StoredPermission>, StoreError> {
-        let data = self.data.read().unwrap();
+        let data = self
+            .data
+            .read()
+            .expect("FilePermissionStore RwLock poisoned");
         Ok(data.plugins.get(key).cloned())
     }
 
     fn set(&self, key: &str, permission: StoredPermission) -> Result<(), StoreError> {
         {
-            let mut data = self.data.write().unwrap();
+            let mut data = self
+                .data
+                .write()
+                .expect("FilePermissionStore RwLock poisoned");
             data.plugins.insert(key.to_string(), permission);
         }
         self.save()
@@ -206,14 +215,20 @@ impl PermissionStore for FilePermissionStore {
 
     fn remove(&self, key: &str) -> Result<(), StoreError> {
         {
-            let mut data = self.data.write().unwrap();
+            let mut data = self
+                .data
+                .write()
+                .expect("FilePermissionStore RwLock poisoned");
             data.plugins.remove(key);
         }
         self.save()
     }
 
     fn list(&self) -> Result<Vec<(String, StoredPermission)>, StoreError> {
-        let data = self.data.read().unwrap();
+        let data = self
+            .data
+            .read()
+            .expect("FilePermissionStore RwLock poisoned");
         Ok(data
             .plugins
             .iter()
@@ -223,7 +238,10 @@ impl PermissionStore for FilePermissionStore {
 
     fn clear(&self) -> Result<(), StoreError> {
         {
-            let mut data = self.data.write().unwrap();
+            let mut data = self
+                .data
+                .write()
+                .expect("FilePermissionStore RwLock poisoned");
             data.plugins.clear();
         }
         self.save()
@@ -257,12 +275,18 @@ impl MemoryPermissionStore {
 
     /// Get the number of stored permissions
     pub fn len(&self) -> usize {
-        self.data.read().unwrap().len()
+        self.data
+            .read()
+            .expect("MemoryPermissionStore RwLock poisoned")
+            .len()
     }
 
     /// Check if the store is empty
     pub fn is_empty(&self) -> bool {
-        self.data.read().unwrap().is_empty()
+        self.data
+            .read()
+            .expect("MemoryPermissionStore RwLock poisoned")
+            .is_empty()
     }
 }
 
@@ -274,29 +298,44 @@ impl Default for MemoryPermissionStore {
 
 impl PermissionStore for MemoryPermissionStore {
     fn get(&self, key: &str) -> Result<Option<StoredPermission>, StoreError> {
-        let data = self.data.read().unwrap();
+        let data = self
+            .data
+            .read()
+            .expect("MemoryPermissionStore RwLock poisoned");
         Ok(data.get(key).cloned())
     }
 
     fn set(&self, key: &str, permission: StoredPermission) -> Result<(), StoreError> {
-        let mut data = self.data.write().unwrap();
+        let mut data = self
+            .data
+            .write()
+            .expect("MemoryPermissionStore RwLock poisoned");
         data.insert(key.to_string(), permission);
         Ok(())
     }
 
     fn remove(&self, key: &str) -> Result<(), StoreError> {
-        let mut data = self.data.write().unwrap();
+        let mut data = self
+            .data
+            .write()
+            .expect("MemoryPermissionStore RwLock poisoned");
         data.remove(key);
         Ok(())
     }
 
     fn list(&self) -> Result<Vec<(String, StoredPermission)>, StoreError> {
-        let data = self.data.read().unwrap();
+        let data = self
+            .data
+            .read()
+            .expect("MemoryPermissionStore RwLock poisoned");
         Ok(data.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
     }
 
     fn clear(&self) -> Result<(), StoreError> {
-        let mut data = self.data.write().unwrap();
+        let mut data = self
+            .data
+            .write()
+            .expect("MemoryPermissionStore RwLock poisoned");
         data.clear();
         Ok(())
     }
