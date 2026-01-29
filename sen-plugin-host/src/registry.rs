@@ -221,11 +221,10 @@ impl PluginRegistry {
                 .record(audit::permission_requested(command_name, capabilities));
 
             // Get stored permission
-            let key = perm_config.store.make_key(
-                command_name,
-                None,
-                perm_config.strategy.granularity(),
-            );
+            let key =
+                perm_config
+                    .store
+                    .make_key(command_name, None, perm_config.strategy.granularity());
             let stored = perm_config.store.get(&key).ok().flatten();
 
             // Build context for strategy
@@ -290,8 +289,10 @@ impl PluginRegistry {
                         Ok(result) if result.is_allowed() => {
                             // Store permission if should persist
                             if result.should_persist() {
-                                let trust_level = result.to_trust_level().unwrap_or(StoredTrustLevel::Session);
-                                let stored_perm = StoredPermission::new(capabilities.clone(), trust_level);
+                                let trust_level =
+                                    result.to_trust_level().unwrap_or(StoredTrustLevel::Session);
+                                let stored_perm =
+                                    StoredPermission::new(capabilities.clone(), trust_level);
                                 let _ = perm_config.store.set(&key, stored_perm);
                             }
 
@@ -559,8 +560,12 @@ mod tests {
         assert!(!events.is_empty(), "Should have audit events");
 
         // Should have at least a permission request event
-        let request_events = audit_sink.find_by_type(crate::audit::AuditEventType::PermissionRequested);
-        assert!(!request_events.is_empty(), "Should have permission request event");
+        let request_events =
+            audit_sink.find_by_type(crate::audit::AuditEventType::PermissionRequested);
+        assert!(
+            !request_events.is_empty(),
+            "Should have permission request event"
+        );
     }
 
     #[tokio::test]
@@ -594,7 +599,8 @@ mod tests {
     #[tokio::test]
     async fn test_registry_with_permissions_prompt_recording() {
         // Verify prompts are triggered correctly
-        let prompt_handler = std::sync::Arc::new(RecordingPromptHandler::new(PromptResult::AllowAlways));
+        let prompt_handler =
+            std::sync::Arc::new(RecordingPromptHandler::new(PromptResult::AllowAlways));
 
         let config = PermissionConfig {
             strategy: std::sync::Arc::new(crate::permission::DefaultPermissionStrategy),
@@ -615,7 +621,11 @@ mod tests {
         let _ = registry.execute("hello", &["World".to_string()]).await;
 
         // Verify prompt was called
-        assert_eq!(prompt_handler.prompt_count(), 1, "Should have prompted once");
+        assert_eq!(
+            prompt_handler.prompt_count(),
+            1,
+            "Should have prompted once"
+        );
         let prompts = prompt_handler.prompts();
         assert_eq!(prompts[0].plugin, "hello");
     }
@@ -672,6 +682,10 @@ mod tests {
 
         // Should succeed without prompting (empty caps = no permissions needed)
         assert!(result.is_ok(), "Empty capabilities should be allowed");
-        assert_eq!(prompt_handler.prompt_count(), 0, "Should not prompt for empty caps");
+        assert_eq!(
+            prompt_handler.prompt_count(),
+            0,
+            "Should not prompt for empty caps"
+        );
     }
 }

@@ -694,6 +694,182 @@ async fn handler(Args(args): Args<CustomArgs>) -> CliResult<String> {
 
 **For 99% of use cases, use Clap's `#[derive(Parser)]` instead.**
 
+## 🔌 Plugin System (WASM)
+
+SEN provides a secure, cross-platform plugin system powered by WebAssembly.
+
+### Why WASM Plugins?
+
+- **Write Once, Run Anywhere**: Single `.wasm` binary works on all platforms
+- **Language Agnostic**: Write plugins in Rust, Zig, or any WASM-compatible language
+- **Secure by Default**: Sandboxed execution with CPU/memory limits
+- **Hot Reload**: Plugins reload automatically when files change
+
+### Architecture
+
+```
+┌─────────────────────────────────────────┐
+│  sen-plugin-api                         │
+│  Shared protocol types (MessagePack)    │
+└─────────────────────────────────────────┘
+         ↑                    ↑
+         │                    │
+┌────────┴────────┐  ┌────────┴────────┐
+│ sen-plugin-sdk  │  │ sen-plugin-host │
+│ Rust SDK for    │  │ Wasmtime-based  │
+│ plugin authors  │  │ plugin runtime  │
+└─────────────────┘  └─────────────────┘
+```
+
+### Quick Start: Rust Plugin
+
+```rust
+use sen_plugin_sdk::prelude::*;
+
+struct GreetPlugin;
+
+impl Plugin for GreetPlugin {
+    fn manifest() -> PluginManifest {
+        PluginManifest::new(CommandSpec {
+            name: "greet".into(),
+            description: "Greet someone".into(),
+            version: "1.0.0".into(),
+            args: vec![ArgSpec::positional("name", "Name to greet")],
+            subcommands: vec![],
+        })
+    }
+
+    fn execute(args: Vec<String>) -> ExecuteResult {
+        let name = args.first().map(|s| s.as_str()).unwrap_or("World");
+        ExecuteResult::success(format!("Hello, {}!", name))
+    }
+}
+
+export_plugin!(GreetPlugin);
+```
+
+Build with:
+```bash
+cargo build --release --target wasm32-unknown-unknown
+```
+
+### Quick Start: Zig Plugin
+
+```zig
+const sdk = @import("sdk/plugin.zig");
+
+pub const plugin = sdk.Plugin{
+    .name = "echo",
+    .about = "Echoes arguments back",
+    .version = "1.0.0",
+    .args = &.{
+        .{ .name = "message", .description = "Message to echo" },
+    },
+};
+
+pub fn execute(ctx: *sdk.Context) sdk.Result {
+    var args = ctx.args();
+    const message = args.next() orelse "No message";
+    return sdk.Result.success(message);
+}
+
+comptime { sdk.exportPlugin(@This()); }
+```
+
+Build with:
+```bash
+zig build wasm
+```
+
+### Router Integration
+
+```rust
+use sen::Router;
+use sen_plugin_host::{PluginRegistry, RouterPluginExt};
+
+#[tokio::main]
+async fn main() {
+    let registry = PluginRegistry::new().unwrap();
+    registry.load_plugin("./plugins/greet.wasm").await.unwrap();
+
+    let router = Router::new()
+        .route("status", handlers::status)
+        .plugin(registry.get("greet").unwrap())  // Add plugin as route
+        .with_state(state);
+
+    router.execute().await;
+}
+```
+
+### Hot Reload
+
+```rust
+use sen_plugin_host::{PluginRegistry, HotReloadWatcher, WatcherConfig};
+
+let registry = PluginRegistry::new()?;
+let _watcher = HotReloadWatcher::new(
+    registry.clone(),
+    vec!["./plugins"],
+    WatcherConfig::default(),
+).await?;
+
+// Plugins automatically reload when .wasm files change
+```
+
+### Security Model
+
+| Protection | Implementation |
+|------------|----------------|
+| **CPU Limit** | 10M fuel per execution |
+| **Stack Limit** | 1MB WASM stack |
+| **Memory Isolation** | Per-plugin linear memory |
+| **API Versioning** | Rejects incompatible plugins |
+| **Capabilities** | Fine-grained permission system |
+
+### Permission System
+
+Plugins declare required capabilities, and the host controls access:
+
+```rust
+use sen_plugin_host::permission::{PermissionPresets, PermissionConfig};
+
+// Choose a preset based on your environment
+let config = PermissionPresets::interactive("myapp")?;  // Development
+let config = PermissionPresets::ci("myapp", None)?;     // CI/CD
+let config = PermissionPresets::strict("myapp")?;       // Production
+
+// Or customize with builder
+let config = PermissionConfigBuilder::new()
+    .app_name("myapp")
+    .strategy(DefaultPermissionStrategy)
+    .store(FilePermissionStore::default_for_app("myapp")?)
+    .prompt(TerminalPromptHandler::new())
+    .build()?;
+```
+
+**Trust Flags** for CLI integration:
+```bash
+myapp --trust-plugin=hello run    # Trust specific plugin
+myapp --trust-command=db:migrate  # Trust specific command
+```
+
+**Available Strategies**:
+
+| Strategy | Behavior |
+|----------|----------|
+| Default | Prompts for ungranted permissions |
+| Strict | Denies in non-interactive mode |
+| Permissive | Allows non-network without prompt |
+| CI | Never prompts, requires pre-granted |
+| TrustAll | Bypasses all checks (dev only) |
+
+### Plugin Examples
+
+See the examples directory:
+- `examples/hello-plugin/` - Manual WASM implementation (Rust)
+- `examples/greet-plugin/` - SDK-based plugin (Rust)
+- `examples/echo-plugin-zig/` - Zig SDK example
+
 ## 🏗️ Architecture
 
 SEN follows a three-layer design:
@@ -762,8 +938,17 @@ cargo test -p sen-rs-macros
 
 - [x] Phase 1: Core framework (State, CliResult, IntoResponse)
 - [x] Phase 2: Macro system (#[derive(SenRouter)])
-- [ ] Phase 3: Advanced features (ReloadableConfig, tracing)
-- [ ] Phase 4: Developer experience (CLI generator, templates)
+- [x] Phase 3: WASM Plugin System
+  - [x] Plugin loading with wasmtime
+  - [x] Rust SDK (`sen-plugin-sdk`)
+  - [x] Zig SDK
+  - [x] Hot reload
+  - [x] Router integration
+  - [x] Capabilities & Permission system
+  - [x] Audit logging
+  - [ ] WASI integration (planned)
+- [ ] Phase 4: Advanced features (ReloadableConfig, tracing)
+- [ ] Phase 5: Developer experience (CLI generator, templates)
 
 ## 🤝 Contributing
 
